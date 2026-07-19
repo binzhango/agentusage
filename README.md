@@ -14,6 +14,14 @@ you explicitly configure a PostgreSQL server.
 > **Project status:** early access. Provider adapters and report fields are
 > still expanding. Feedback and fixtures are welcome.
 
+## Roadmap
+
+- [ ] Add Google Antigravity CLI usage support.
+- [ ] Expand the local web server into a fully interactive dashboard with richer
+  filtering, provider detail views, and responsive usage exploration.
+- [ ] Add a `config.toml` onboarding flow for discovering and configuring multiple
+  agent sources in one place.
+
 ## Highlights
 
 - Daily, weekly, monthly, yearly, and arbitrary date-range reports.
