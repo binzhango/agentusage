@@ -46,7 +46,6 @@ Available release targets:
 | Platform | Archive |
 | --- | --- |
 | macOS Apple Silicon | `agentusage-macos-aarch64.tar.gz` |
-| macOS Intel | `agentusage-macos-x86_64.tar.gz` |
 | Linux ARM64 | `agentusage-linux-aarch64.tar.gz` |
 | Linux x86_64 | `agentusage-linux-x86_64.tar.gz` |
 | Windows x86_64 | `agentusage-windows-x86_64.zip` |
