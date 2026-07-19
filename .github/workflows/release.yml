@@ -21,7 +21,7 @@ jobs:
       revision: ${{ steps.revision.outputs.revision }}
     steps:
       - name: Check out Rust project only
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           sparse-checkout: |
             .github
@@ -106,7 +106,7 @@ jobs:
 
     steps:
       - name: Check out released revision only
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.version.outputs.revision }}
           sparse-checkout: |
@@ -158,7 +158,7 @@ jobs:
           Compress-Archive -Path dist/agentusage.exe,dist/LICENSE,dist/README.md -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
@@ -169,7 +169,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: dist
           merge-multiple: true
