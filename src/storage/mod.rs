@@ -21,6 +21,39 @@ pub struct RawEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UsageMetric {
+    pub metric_id: String,
+    pub occurred_at: DateTime<Utc>,
+    pub provider_id: String,
+    pub agent_name: String,
+    pub session_id: Option<String>,
+    pub dimension: String,
+    pub name: String,
+    pub dedup_key: String,
+}
+
+/// One imported provider event. The source JSONL is retained here for audit,
+/// while the common columns let the dashboard query without reopening files.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IngestRecord {
+    pub record_id: String,
+    pub source_path: String,
+    pub line_number: i64,
+    pub occurred_at: Option<DateTime<Utc>>,
+    pub provider_id: String,
+    pub agent_name: String,
+    pub session_id: Option<String>,
+    pub event_type: String,
+    pub payload_type: Option<String>,
+    pub model: Option<String>,
+    pub client: Option<String>,
+    pub project: Option<String>,
+    pub tool_name: Option<String>,
+    pub payload: serde_json::Value,
+    pub dedup_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UsageEvent {
     pub event_id: String,
     pub occurred_at: DateTime<Utc>,
@@ -30,6 +63,7 @@ pub struct UsageEvent {
     pub session_id: Option<String>,
     pub model: Option<String>,
     pub client: Option<String>,
+    pub project: Option<String>,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub reasoning_tokens: i64,
@@ -78,6 +112,9 @@ pub struct UsageSummary {
     pub lines_removed: i64,
     pub models: BTreeMap<String, UsageBucket>,
     pub clients: BTreeMap<String, UsageBucket>,
+    pub projects: BTreeMap<String, UsageBucket>,
+    pub tools: BTreeMap<String, i64>,
+    pub languages: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -104,8 +141,16 @@ impl UsageSummary {
 }
 
 pub trait UsageStore {
+    fn append_record(&mut self, record: &IngestRecord) -> Result<bool> {
+        let _ = record;
+        Ok(false)
+    }
     fn append_raw_event(&mut self, event: &RawEvent) -> Result<bool>;
     fn append_usage_event(&mut self, event: &UsageEvent) -> Result<bool>;
+    fn append_metric(&mut self, metric: &UsageMetric) -> Result<bool> {
+        let _ = metric;
+        Ok(false)
+    }
     fn cursor(&mut self, path: &str) -> Result<Option<FileCursor>>;
     fn save_cursor(&mut self, cursor: &FileCursor) -> Result<()>;
     fn summary(&mut self, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<UsageSummary>;
@@ -138,6 +183,32 @@ impl Backend {
                 Ok(Self::Postgres(postgres::PostgresStore::connect(&url)?))
             }
             BackendMode::Jsonl => anyhow::bail!("JSONL fallback has no storage backend"),
+        }
+    }
+
+    pub fn open_read_only_for_agent(mode: BackendMode, agent: &str) -> Result<Self> {
+        match mode {
+            BackendMode::Sqlite => Ok(Self::Sqlite(sqlite::SqliteStore::open_read_only(
+                &crate::config::agent_db_path(agent)?,
+            )?)),
+            BackendMode::Postgres => {
+                let url = env::var("AGENTUSAGE_POSTGRES_URL")
+                    .map_err(|_| anyhow::anyhow!("AGENTUSAGE_POSTGRES_URL is not set"))?;
+                Ok(Self::Postgres(postgres::PostgresStore::connect(&url)?))
+            }
+            BackendMode::Jsonl => anyhow::bail!("JSONL fallback has no read-only storage backend"),
+        }
+    }
+
+    pub fn quick_summary_for_agent(
+        &mut self,
+        agent_name: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<UsageSummary> {
+        match self {
+            Self::Sqlite(store) => store.quick_summary_for_agent(agent_name, from, to),
+            Self::Postgres(store) => store.summary_for_agent(Some(agent_name), from, to),
         }
     }
 }
@@ -208,6 +279,13 @@ pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<Backe
 }
 
 impl UsageStore for Backend {
+    fn append_record(&mut self, record: &IngestRecord) -> Result<bool> {
+        match self {
+            Self::Sqlite(store) => store.append_record(record),
+            Self::Postgres(store) => store.append_record(record),
+        }
+    }
+
     fn append_raw_event(&mut self, event: &RawEvent) -> Result<bool> {
         match self {
             Self::Sqlite(store) => store.append_raw_event(event),
@@ -218,6 +296,13 @@ impl UsageStore for Backend {
         match self {
             Self::Sqlite(store) => store.append_usage_event(event),
             Self::Postgres(store) => store.append_usage_event(event),
+        }
+    }
+
+    fn append_metric(&mut self, metric: &UsageMetric) -> Result<bool> {
+        match self {
+            Self::Sqlite(store) => store.append_metric(metric),
+            Self::Postgres(store) => store.append_metric(metric),
         }
     }
     fn cursor(&mut self, path: &str) -> Result<Option<FileCursor>> {
@@ -283,6 +368,12 @@ pub fn add_event(summary: &mut UsageSummary, event: &UsageEvent) {
     }
     if let Some(client) = &event.client {
         add_bucket(summary.clients.entry(client.clone()).or_default(), &bucket);
+    }
+    if let Some(project) = &event.project {
+        add_bucket(
+            summary.projects.entry(project.clone()).or_default(),
+            &bucket,
+        );
     }
 }
 
