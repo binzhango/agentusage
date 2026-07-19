@@ -39,8 +39,13 @@ curl -fL -o agentusage.tar.gz \
   https://github.com/binzhango/agentusage/releases/latest/download/agentusage-macos-aarch64.tar.gz
 tar -xzf agentusage.tar.gz
 sudo install -m 0755 agentusage /usr/local/bin/agentusage
+sudo install -m 0755 au /usr/local/bin/au
 agentusage --version
+au --version
 ```
+
+`au` is an executable alias for `agentusage`; both commands support the same
+dashboard, server, report, and telemetry subcommands.
 
 Available release targets:
 
