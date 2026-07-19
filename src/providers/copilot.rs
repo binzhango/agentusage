@@ -433,6 +433,8 @@ fn stable(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Local, NaiveDateTime, TimeZone, Utc};
+
     use super::{normalize_model, parse_vscode_chat_request, parse_vscode_request};
 
     #[test]
@@ -441,7 +443,15 @@ mod tests {
         let (request_id, model, occurred_at) = parse_vscode_request(line).expect("request");
         assert_eq!(request_id, "603573d1.copilotmd");
         assert_eq!(normalize_model(&model), "MAI-Code-1-Flash");
-        assert_eq!(occurred_at.to_rfc3339(), "2026-07-19T19:01:31.522+00:00");
+        let local_time =
+            NaiveDateTime::parse_from_str("2026-07-19 15:01:31.522", "%Y-%m-%d %H:%M:%S%.3f")
+                .unwrap();
+        let expected = Local
+            .from_local_datetime(&local_time)
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(occurred_at, expected);
     }
 
     #[test]
