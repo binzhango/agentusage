@@ -51,7 +51,7 @@ jobs:
           cargo check --locked
           cargo test --locked
           cargo clippy --all-targets --all-features --locked -- -D warnings
-          cargo package --locked --no-verify
+          cargo package --locked --allow-dirty --no-verify
 
       - name: Read version
         id: version
