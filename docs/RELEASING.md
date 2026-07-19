@@ -26,10 +26,12 @@ Releases are driven by pushes to `main`; no manual version edit or tag is
 needed. The workflow serializes releases and, for each main-branch push:
 
 1. Bumps the patch version with `cargo set-version`.
-2. Runs formatting, compilation, tests, Clippy, and package checks.
-3. Commits the version update and creates a `vX.Y.Z` tag.
-4. Publishes `agentusage` to crates.io.
-5. Builds archives and attaches them, plus SHA-256 checksums, to a GitHub
+2. Generates a dated `CHANGELOG.md` section from commits since the previous
+   release tag.
+3. Runs formatting, compilation, tests, Clippy, and package checks.
+4. Commits the version and changelog update and creates a `vX.Y.Z` tag.
+5. Publishes `agentusage` to crates.io.
+6. Builds archives and attaches them, plus SHA-256 checksums, to a GitHub
    release.
 
 GitHub repository setup:
@@ -46,7 +48,7 @@ The workflow builds these targets:
    - `aarch64-unknown-linux-gnu`
    - `x86_64-pc-windows-msvc`
 
-6. Download one archive for the target platform and verify its checksum before
+7. Download one archive for the target platform and verify its checksum before
    publishing installation instructions.
 
 The release workflow uses sparse checkout and Cargo package exclusion. The

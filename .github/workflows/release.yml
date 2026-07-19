@@ -21,12 +21,13 @@ jobs:
       revision: ${{ steps.revision.outputs.revision }}
     steps:
       - name: Check out Rust project only
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           sparse-checkout: |
             .github
             Cargo.toml
             Cargo.lock
+            CHANGELOG.md
             LICENSE
             Makefile
             README.md
@@ -51,12 +52,50 @@ jobs:
           cargo check --locked
           cargo test --locked
           cargo clippy --all-targets --all-features --locked -- -D warnings
-          cargo package --locked --no-verify
+          cargo package --locked --allow-dirty --no-verify
 
       - name: Read version
         id: version
         shell: bash
         run: echo "version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')" >> "$GITHUB_OUTPUT"
+
+      - name: Update changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import datetime
+          import os
+          import pathlib
+          import subprocess
+
+          path = pathlib.Path("CHANGELOG.md")
+          text = path.read_text() if path.exists() else "# Changelog\n\n## [Unreleased]\n"
+          previous = subprocess.run(
+              ["git", "describe", "--tags", "--abbrev=0"],
+              capture_output=True,
+              text=True,
+              check=False,
+          ).stdout.strip()
+          revision_range = f"{previous}..HEAD" if previous else "HEAD"
+          entries = subprocess.run(
+              ["git", "log", revision_range, "--pretty=format:- %s (%h)"],
+              capture_output=True,
+              text=True,
+              check=True,
+          ).stdout.strip() or "- Maintenance release"
+          section = (
+              f"## [{os.environ['VERSION']}] - "
+              f"{datetime.date.today().isoformat()}\n\n{entries}\n"
+          )
+          marker = "## [Unreleased]"
+          if marker in text:
+              insert_at = text.index(marker) + len(marker)
+              text = text[:insert_at] + "\n\n" + section + text[insert_at:]
+          else:
+              text = text.rstrip() + "\n\n" + section
+          path.write_text(text)
+          PY
 
       - name: Commit version and tag
         shell: bash
@@ -65,7 +104,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
+          git add Cargo.toml Cargo.lock CHANGELOG.md
           git commit -m "chore(release): v${VERSION} [skip ci]"
           git tag "v${VERSION}"
           git push origin HEAD:main --follow-tags
@@ -106,12 +145,13 @@ jobs:
 
     steps:
       - name: Check out released revision only
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.version.outputs.revision }}
           sparse-checkout: |
             Cargo.toml
             Cargo.lock
+            CHANGELOG.md
             LICENSE
             README.md
             src
@@ -145,8 +185,8 @@ jobs:
         run: |
           mkdir dist
           cp "target/${{ matrix.target }}/release/agentusage" dist/agentusage
-          cp LICENSE README.md dist/
-          tar -C dist -czf "${{ matrix.archive }}" agentusage LICENSE README.md
+          cp CHANGELOG.md LICENSE README.md dist/
+          tar -C dist -czf "${{ matrix.archive }}" agentusage CHANGELOG.md LICENSE README.md
 
       - name: Package Windows archive
         if: runner.os == 'Windows'
@@ -154,11 +194,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/agentusage.exe" dist/agentusage.exe
-          Copy-Item LICENSE,README.md dist/
-          Compress-Archive -Path dist/agentusage.exe,dist/LICENSE,dist/README.md -DestinationPath "${{ matrix.archive }}"
+          Copy-Item CHANGELOG.md,LICENSE,README.md dist/
+          Compress-Archive -Path dist/agentusage.exe,dist/CHANGELOG.md,dist/LICENSE,dist/README.md -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
@@ -169,7 +209,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: dist
           merge-multiple: true

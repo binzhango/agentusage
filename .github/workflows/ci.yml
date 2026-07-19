@@ -19,12 +19,13 @@ jobs:
 
     steps:
       - name: Check out Rust project only
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           sparse-checkout: |
             .github
             Cargo.toml
             Cargo.lock
+            CHANGELOG.md
             LICENSE
             Makefile
             README.md
@@ -37,7 +38,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
