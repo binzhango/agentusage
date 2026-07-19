@@ -25,6 +25,7 @@ jobs:
             .github
             Cargo.toml
             Cargo.lock
+            CHANGELOG.md
             LICENSE
             Makefile
             README.md

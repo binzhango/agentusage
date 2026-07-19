@@ -206,6 +206,8 @@ Contributor checks are documented in
 publishing, platform builds, and GitHub releases are documented in
 [docs/RELEASING.md](docs/RELEASING.md).
 
+Release history is maintained in [CHANGELOG.md](CHANGELOG.md).
+
 The Rust source is rooted in this repository. The local reference checkout is
 excluded from Rust packages, GitHub Actions, and release archives.
 
