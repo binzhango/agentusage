@@ -1,0 +1,62 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Check out Rust project only
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            Cargo.toml
+            Cargo.lock
+            LICENSE
+            Makefile
+            README.md
+            docs
+            src
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check compilation
+        run: cargo check --locked
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Check package boundary
+        run: cargo package --locked --allow-dirty
