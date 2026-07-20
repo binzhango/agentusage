@@ -161,12 +161,11 @@ fn content_type(value: &str) -> Header {
 
 fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]
-    let command = ("open", url);
+    let _ = Command::new("open").arg(url).spawn();
     #[cfg(target_os = "linux")]
-    let command = ("xdg-open", url);
+    let _ = Command::new("xdg-open").arg(url).spawn();
     #[cfg(target_os = "windows")]
-    let command = ("cmd", "/C start");
-    let _ = Command::new(command.0).arg(command.1).spawn();
+    let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
 }
 
 const INDEX_HTML: &str = r#"<!doctype html>
