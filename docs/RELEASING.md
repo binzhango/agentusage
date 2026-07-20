@@ -27,12 +27,13 @@ needed. The workflow serializes releases and, for each main-branch push:
 
 1. Bumps the patch version with `cargo set-version`.
 2. Generates a dated `CHANGELOG.md` section from commits since the previous
-   release tag.
+   release tag and prepares the same commit list as the GitHub release body.
 3. Runs formatting, compilation, tests, Clippy, and package checks.
 4. Commits the version and changelog update and creates a `vX.Y.Z` tag.
 5. Publishes `agentusage` to crates.io.
 6. Builds archives and attaches them, plus SHA-256 checksums, to a GitHub
-   release.
+   release. The release body is generated from `RELEASE_NOTES.md`; GitHub's
+   pull-request summary is not used.
 
 GitHub repository setup:
 
