@@ -11,25 +11,6 @@ use std::{
 
 use crate::storage::{FileCursor, RawEvent, UsageEvent, UsageStore};
 
-#[derive(Debug, Deserialize)]
-struct DesktopHistory {
-    samples: Vec<DesktopSample>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DesktopSample {
-    t: i64,
-    u: DesktopSignals,
-}
-
-#[derive(Debug, Deserialize)]
-struct DesktopSignals {
-    #[serde(rename = "fh")]
-    five_hour: i64,
-    #[serde(rename = "sd")]
-    seven_day: i64,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum Agent {
     ClaudeCode,
@@ -64,25 +45,6 @@ pub fn default_dir(agent: Agent) -> PathBuf {
             }
         }
     }
-}
-
-pub fn desktop_usage() -> Option<crate::providers::codex::DesktopUsage> {
-    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).ok()?;
-    let path = if cfg!(target_os = "macos") {
-        PathBuf::from(&home).join("Library/Application Support/Claude/plan-usage-history.json")
-    } else if cfg!(target_os = "windows") {
-        PathBuf::from(&home).join("AppData/Roaming/Claude/plan-usage-history.json")
-    } else {
-        PathBuf::from(&home).join(".config/Claude/plan-usage-history.json")
-    };
-    let history = serde_json::from_str::<DesktopHistory>(&fs::read_to_string(path).ok()?).ok()?;
-    let latest = history.samples.iter().max_by_key(|sample| sample.t)?;
-    Some(crate::providers::codex::DesktopUsage {
-        samples: history.samples.len(),
-        latest_timestamp_ms: latest.t,
-        five_hour_signal: latest.u.five_hour,
-        seven_day_signal: latest.u.seven_day,
-    })
 }
 
 pub fn ingest_into_store<S: UsageStore>(

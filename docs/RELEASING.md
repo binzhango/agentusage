@@ -65,5 +65,5 @@ agentusage daily --provider codex
 agentusage daily --provider copilot
 ```
 
-For a clean machine, confirm the first-run storage prompt and JSONL fallback
-behavior before testing provider ingestion.
+For a clean machine, confirm the first-run storage prompt rejects report access
+until SQLite or PostgreSQL is initialized, then test provider ingestion.

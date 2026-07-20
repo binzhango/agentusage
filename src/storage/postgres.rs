@@ -1,4 +1,7 @@
-use super::{FileCursor, RawEvent, UsageEvent, UsageStore, UsageSummary, add_event};
+use super::{
+    FileCursor, IngestRecord, RawEvent, UsageBucket, UsageEvent, UsageMetric, UsageStore,
+    UsageSummary, add_event,
+};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use postgres::{Client, NoTls};
@@ -17,14 +20,41 @@ impl PostgresStore {
     }
 
     fn init(&mut self) -> Result<()> {
-        let _ = self.client.batch_execute("ALTER TABLE agentusage_usage_events ADD COLUMN IF NOT EXISTS project TEXT; CREATE INDEX IF NOT EXISTS agentusage_usage_events_project ON agentusage_usage_events(project);");
-        self.client.batch_execute("CREATE TABLE IF NOT EXISTS agentusage_usage_raw_events (event_id TEXT PRIMARY KEY, source_system TEXT NOT NULL, source_channel TEXT NOT NULL, occurred_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL, payload_hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS agentusage_usage_events (event_id TEXT PRIMARY KEY, occurred_at TIMESTAMPTZ NOT NULL, provider_id TEXT NOT NULL, agent_name TEXT NOT NULL, account_id TEXT, session_id TEXT, model TEXT, client TEXT, input_tokens BIGINT NOT NULL, output_tokens BIGINT NOT NULL, reasoning_tokens BIGINT NOT NULL, cache_read_tokens BIGINT NOT NULL, cache_write_tokens BIGINT NOT NULL, total_tokens BIGINT NOT NULL, cost_usd DOUBLE PRECISION NOT NULL, ai_units_nano BIGINT NOT NULL DEFAULT 0, request_multiplier DOUBLE PRECISION NOT NULL DEFAULT 0, ai_credits DOUBLE PRECISION NOT NULL DEFAULT 0, requests BIGINT NOT NULL, prompts BIGINT NOT NULL, lines_added BIGINT NOT NULL, lines_removed BIGINT NOT NULL, dedup_key TEXT NOT NULL UNIQUE, raw_event_id TEXT NOT NULL REFERENCES agentusage_usage_raw_events(event_id)); ALTER TABLE agentusage_usage_events ADD COLUMN IF NOT EXISTS ai_units_nano BIGINT NOT NULL DEFAULT 0; ALTER TABLE agentusage_usage_events ADD COLUMN IF NOT EXISTS request_multiplier DOUBLE PRECISION NOT NULL DEFAULT 0; ALTER TABLE agentusage_usage_events ADD COLUMN IF NOT EXISTS ai_credits DOUBLE PRECISION NOT NULL DEFAULT 0; CREATE INDEX IF NOT EXISTS agentusage_usage_events_occurred_at ON agentusage_usage_events(occurred_at); CREATE TABLE IF NOT EXISTS agentusage_ingest_cursors (path TEXT PRIMARY KEY, byte_offset BIGINT NOT NULL, file_size BIGINT NOT NULL, last_event_hash TEXT, updated_at TIMESTAMPTZ NOT NULL);")?;
-        self.client.batch_execute("ALTER TABLE agentusage_usage_events ADD COLUMN IF NOT EXISTS project TEXT; CREATE INDEX IF NOT EXISTS agentusage_usage_events_project ON agentusage_usage_events(project);")?;
+        self.client.batch_execute(super::schema::POSTGRES)?;
+        // Bring databases created by older releases up to the canonical shape.
+        self.client.batch_execute("ALTER TABLE agentusage_usage_events ADD COLUMN IF NOT EXISTS project TEXT; ALTER TABLE agentusage_usage_events ADD COLUMN IF NOT EXISTS ai_units_nano BIGINT NOT NULL DEFAULT 0; ALTER TABLE agentusage_usage_events ADD COLUMN IF NOT EXISTS request_multiplier DOUBLE PRECISION NOT NULL DEFAULT 0; ALTER TABLE agentusage_usage_events ADD COLUMN IF NOT EXISTS ai_credits DOUBLE PRECISION NOT NULL DEFAULT 0;")?;
+        self.client.batch_execute(
+            "CREATE INDEX IF NOT EXISTS agentusage_usage_events_project ON agentusage_usage_events(project);",
+        )?;
         Ok(())
     }
 }
 
 impl UsageStore for PostgresStore {
+    fn append_record(&mut self, record: &IngestRecord) -> Result<bool> {
+        let n = self.client.execute(
+            "INSERT INTO agentusage_ingest_records (record_id,source_path,line_number,occurred_at,provider_id,agent_name,session_id,event_type,payload_type,model,client,project,tool_name,payload,dedup_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (dedup_key) DO NOTHING",
+            &[
+                &record.record_id,
+                &record.source_path,
+                &record.line_number,
+                &record.occurred_at,
+                &record.provider_id,
+                &record.agent_name,
+                &record.session_id,
+                &record.event_type,
+                &record.payload_type,
+                &record.model,
+                &record.client,
+                &record.project,
+                &record.tool_name,
+                &record.payload,
+                &record.dedup_key,
+            ],
+        )?;
+        Ok(n > 0)
+    }
+
     fn append_raw_event(&mut self, event: &RawEvent) -> Result<bool> {
         let n = self.client.execute(
             "INSERT INTO agentusage_usage_raw_events VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
@@ -39,6 +69,24 @@ impl UsageStore for PostgresStore {
         )?;
         Ok(n > 0)
     }
+
+    fn append_metric(&mut self, metric: &UsageMetric) -> Result<bool> {
+        let n = self.client.execute(
+            "INSERT INTO agentusage_usage_metrics (metric_id,occurred_at,provider_id,agent_name,session_id,dimension,name,dedup_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (dedup_key) DO NOTHING",
+            &[
+                &metric.metric_id,
+                &metric.occurred_at,
+                &metric.provider_id,
+                &metric.agent_name,
+                &metric.session_id,
+                &metric.dimension,
+                &metric.name,
+                &metric.dedup_key,
+            ],
+        )?;
+        Ok(n > 0)
+    }
+
     fn append_usage_event(&mut self, event: &UsageEvent) -> Result<bool> {
         let n = self.client.execute("INSERT INTO agentusage_usage_events (event_id,occurred_at,provider_id,agent_name,account_id,session_id,model,client,project,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,total_tokens,cost_usd,ai_units_nano,request_multiplier,ai_credits,requests,prompts,lines_added,lines_removed,dedup_key,raw_event_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) ON CONFLICT (dedup_key) DO NOTHING", &[&event.event_id, &event.occurred_at, &event.provider_id, &event.agent_name, &event.account_id, &event.session_id, &event.model, &event.client, &event.project, &event.input_tokens, &event.output_tokens, &event.reasoning_tokens, &event.cache_read_tokens, &event.cache_write_tokens, &event.total_tokens, &event.cost_usd, &event.ai_units_nano, &event.request_multiplier, &event.ai_credits, &event.requests, &event.prompts, &event.lines_added, &event.lines_removed, &event.dedup_key, &event.raw_event_id])?;
         Ok(n > 0)
@@ -98,7 +146,80 @@ impl UsageStore for PostgresStore {
                 },
             );
         }
+        for dimension in ["model", "client"] {
+            let rows = self.client.query(
+                &format!(
+                    "SELECT {dimension}, COALESCE(SUM(requests),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(reasoning_tokens),0), COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(ai_units_nano),0), COALESCE(SUM(request_multiplier),0), COALESCE(SUM(ai_credits),0) FROM agentusage_usage_events WHERE occurred_at >= $1 AND occurred_at < $2 AND ($3::text IS NULL OR agent_name = $3) AND {dimension} IS NOT NULL AND {dimension} <> '' GROUP BY {dimension}"
+                ),
+                &[&from, &to, &agent_name],
+            )?;
+            for row in rows {
+                let name: String = row.get(0);
+                let bucket = bucket_from_row(&row);
+                if dimension == "model" {
+                    summary.models.insert(name, bucket);
+                } else {
+                    summary.clients.insert(name, bucket);
+                }
+            }
+        }
+        let project_rows = self.client.query(
+            "SELECT COALESCE(NULLIF(e.project,''), raw.payload->'payload'->>'cwd', raw.payload->>'cwd'), COALESCE(SUM(e.requests),0), COALESCE(SUM(e.input_tokens),0), COALESCE(SUM(e.output_tokens),0), COALESCE(SUM(e.reasoning_tokens),0), COALESCE(SUM(e.cache_read_tokens),0), COALESCE(SUM(e.cache_write_tokens),0), COALESCE(SUM(e.total_tokens),0), COALESCE(SUM(e.cost_usd),0), COALESCE(SUM(e.ai_units_nano),0), COALESCE(SUM(e.request_multiplier),0), COALESCE(SUM(e.ai_credits),0) FROM agentusage_usage_events e JOIN agentusage_usage_raw_events raw ON raw.event_id=e.raw_event_id WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND ($3::text IS NULL OR e.agent_name = $3) AND COALESCE(NULLIF(e.project,''), raw.payload->'payload'->>'cwd', raw.payload->>'cwd') IS NOT NULL GROUP BY 1",
+            &[&from, &to, &agent_name],
+        )?;
+        for row in project_rows {
+            let name: String = row.get(0);
+            summary.projects.insert(name, bucket_from_row(&row));
+        }
+        let metric_rows = self.client.query(
+            "SELECT dimension,name,COUNT(*) FROM agentusage_usage_metrics WHERE occurred_at >= $1 AND occurred_at < $2 AND ($3::text IS NULL OR agent_name = $3) GROUP BY dimension,name",
+            &[&from, &to, &agent_name],
+        )?;
+        for row in metric_rows {
+            let dimension: String = row.get(0);
+            let name: String = row.get(1);
+            let count: i64 = row.get(2);
+            match dimension.as_str() {
+                "tool" => {
+                    summary.tools.insert(name, count);
+                }
+                "language_v2" => {
+                    summary.languages.insert(name, count);
+                }
+                _ => {}
+            }
+        }
+        if let Some(agent_name) = agent_name {
+            let latest = self.client.query_opt(
+                "SELECT payload FROM agentusage_usage_raw_events WHERE source_system=$1 ORDER BY occurred_at DESC LIMIT 1",
+                &[&agent_name],
+            )?;
+            if let Some(row) = latest {
+                let payload: serde_json::Value = row.get(0);
+                if let Some((used, window, resets)) = super::quota_from_payload(&payload) {
+                    summary.primary_used_percent = Some(used);
+                    summary.primary_window_minutes = window;
+                    summary.primary_resets_at = resets;
+                }
+            }
+        }
         summary.sessions = self.client.query_one("SELECT COUNT(DISTINCT session_id) FROM agentusage_usage_events WHERE occurred_at >= $1 AND occurred_at < $2 AND ($3::text IS NULL OR agent_name = $3)", &[&from, &to, &agent_name])?.get(0);
         Ok(summary)
+    }
+}
+
+fn bucket_from_row(row: &postgres::Row) -> UsageBucket {
+    UsageBucket {
+        requests: row.get(1),
+        input_tokens: row.get(2),
+        output_tokens: row.get(3),
+        reasoning_tokens: row.get(4),
+        cache_read_tokens: row.get(5),
+        cache_write_tokens: row.get(6),
+        total_tokens: row.get(7),
+        cost_usd: row.get(8),
+        ai_units_nano: row.get(9),
+        request_multiplier: row.get(10),
+        ai_credits: row.get(11),
     }
 }

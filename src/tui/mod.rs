@@ -22,7 +22,6 @@ use ratatui::{
 };
 
 const PROVIDERS: [&str; 4] = ["codex", "claude_code", "opencode", "copilot"];
-const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Window {
@@ -131,6 +130,7 @@ pub fn run() -> Result<()> {
     // Codex keeps the existing interactive initialization behavior. Other
     // providers are discovered without prompting and appear unavailable until
     // their storage has been initialized.
+    let config = crate::config::load()?;
     let codex_backend = crate::prepare_report_backend("codex")?;
     let mut backends = Vec::new();
     for provider in PROVIDERS {
@@ -147,7 +147,7 @@ pub fn run() -> Result<()> {
     execute!(stdout, EnterAlternateScreen).context("enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("create terminal")?;
-    let result = Dashboard::new(backends).event_loop(&mut terminal);
+    let result = Dashboard::new(backends, config).event_loop(&mut terminal);
     disable_raw_mode().ok();
     execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
     terminal.show_cursor().ok();
@@ -167,11 +167,16 @@ struct Dashboard {
     generation: u64,
     queued_window: Option<Window>,
     startup_ingest_pending: bool,
+    auto_sync: bool,
+    auto_refresh_interval: Duration,
     last_auto_refresh: Instant,
 }
 
 impl Dashboard {
-    fn new(backends: Vec<(String, crate::storage::BackendMode)>) -> Self {
+    fn new(
+        backends: Vec<(String, crate::storage::BackendMode)>,
+        config: crate::config::AppConfig,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         let mut dashboard = Self {
             backends,
@@ -185,7 +190,9 @@ impl Dashboard {
             pending: 0,
             generation: 0,
             queued_window: None,
-            startup_ingest_pending: true,
+            startup_ingest_pending: config.auto_sync,
+            auto_sync: config.auto_sync,
+            auto_refresh_interval: config.refresh_interval,
             last_auto_refresh: Instant::now(),
         };
         // Show the cached summary first, then backfill newly added dimensions
@@ -265,7 +272,10 @@ impl Dashboard {
                     }
                 }
             }
-            if !self.refreshing && self.last_auto_refresh.elapsed() >= AUTO_REFRESH_INTERVAL {
+            if self.auto_sync
+                && !self.refreshing
+                && self.last_auto_refresh.elapsed() >= self.auto_refresh_interval
+            {
                 self.last_auto_refresh = Instant::now();
                 self.refresh(self.tx.clone(), true);
             }
@@ -984,12 +994,12 @@ fn load_provider(
     backend: crate::storage::BackendMode,
     ingest: bool,
 ) -> ProviderData {
-    if !ingest && backend != crate::storage::BackendMode::Jsonl {
+    if !ingest {
         return load_cached_provider(name, start, end, backend);
     }
-    match crate::report_for_period(name, start, end, None, backend) {
+    match crate::report_for_period(name, start, end, backend) {
         Ok(report) => {
-            let rate_limit = if ingest && backend != crate::storage::BackendMode::Jsonl {
+            let rate_limit = if ingest {
                 let cached = load_cached_provider(name, start, end, backend);
                 (cached.primary_used_percent, cached.primary_window_minutes)
             } else {
@@ -1044,9 +1054,7 @@ fn load_provider(
                 languages,
                 primary_used_percent: rate_limit.0,
                 primary_window_minutes: rate_limit.1,
-                desktop_signal: report
-                    .desktop_usage
-                    .map(|d| (d.five_hour_signal, d.seven_day_signal)),
+                desktop_signal: None,
                 ..Default::default()
             }
         }
@@ -1126,10 +1134,7 @@ fn load_cached_provider(
                 languages,
                 primary_used_percent: summary.primary_used_percent,
                 primary_window_minutes: summary.primary_window_minutes,
-                desktop_signal: (name == "claude_code")
-                    .then(crate::providers::local::desktop_usage)
-                    .flatten()
-                    .map(|d| (d.five_hour_signal, d.seven_day_signal)),
+                desktop_signal: None,
                 ..Default::default()
             }
         }
@@ -1213,8 +1218,16 @@ fn usage_status(provider: &ProviderData) -> String {
         provider.primary_window_minutes,
     ) {
         (Some(used), Some(window)) => {
-            format!("{used:.1}% used · {}d window", window / 1440)
+            format!(
+                "{:.1}% remaining ({used:.1}% used) · {}d window",
+                (100.0 - used).clamp(0.0, 100.0),
+                window / 1440
+            )
         }
+        (Some(used), None) => format!(
+            "{:.1}% remaining ({used:.1}% used)",
+            (100.0 - used).clamp(0.0, 100.0)
+        ),
         _ => "quota unavailable".into(),
     }
 }
@@ -1224,12 +1237,13 @@ fn rate_limit_bar(used: Option<f64>, width: usize) -> String {
     let Some(used) = used else {
         return format!("Usage     {} quota unavailable", "·".repeat(width));
     };
-    let filled = ((used / 100.0).clamp(0.0, 1.0) * width as f64).round() as usize;
+    let remaining = (100.0 - used).clamp(0.0, 100.0);
+    let filled = (remaining / 100.0 * width as f64).round() as usize;
     format!(
-        "Usage     {}{} {:>4.1}%",
+        "Quota     {}{} {:>4.1}% left",
         "█".repeat(filled),
         "·".repeat(width - filled),
-        used
+        remaining
     )
 }
 

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -55,15 +55,6 @@ pub struct DailyUsage {
     pub files_with_usage: usize,
     pub token_records: usize,
     pub malformed_lines: usize,
-    pub desktop_usage: Option<DesktopUsage>,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct DesktopUsage {
-    pub samples: usize,
-    pub latest_timestamp_ms: i64,
-    pub five_hour_signal: i64,
-    pub seven_day_signal: i64,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -83,45 +74,6 @@ struct Counters {
     cached: i64,
     cache_write: i64,
     total: i64,
-}
-
-pub fn today_usage(date: Option<&str>, sessions_dir: Option<&str>) -> Result<DailyUsage> {
-    let target = match date {
-        Some(value) => NaiveDate::parse_from_str(value, "%Y-%m-%d")
-            .with_context(|| format!("invalid date {value:?}; expected YYYY-MM-DD"))?,
-        None => Local::now().date_naive(),
-    };
-    usage_between(target, target, sessions_dir)
-}
-
-pub fn usage_between(
-    start: NaiveDate,
-    end: NaiveDate,
-    sessions_dir: Option<&str>,
-) -> Result<DailyUsage> {
-    if end < start {
-        anyhow::bail!("end date must be on or after start date");
-    }
-    let root = sessions_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(default_sessions_dir);
-    let mut report = DailyUsage {
-        date: start,
-        end_date: end,
-        provider: "codex".into(),
-        ..Default::default()
-    };
-    for path in jsonl_files(&root)? {
-        report.files_scanned += 1;
-        let requests_before = report.requests;
-        if parse_session(&path, start, end, &mut report)? {
-            report.sessions += 1;
-        }
-        if report.requests > requests_before {
-            report.files_with_usage += 1;
-        }
-    }
-    Ok(report)
 }
 
 pub fn ingest_into_store<S: UsageStore>(
@@ -204,16 +156,12 @@ fn ingest_session<S: UsageStore>(
             }
             continue;
         };
-        let kind = root.get("type").and_then(Value::as_str).unwrap_or_default();
-        let payload = root.get("payload").unwrap_or(&Value::Null);
-        let occurred_at = root
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc));
+        let kind = event_kind(&root);
+        let payload = event_payload(&root);
+        let occurred_at = event_timestamp(&root);
         let line_id = format!("{}:{current_line_number}", path.display());
         if kind == "session_meta" {
-            model = first_string(payload, &["model", "model_id"]).unwrap_or(model);
+            model = first_string(payload, &["model", "model_id", "modelId"]).unwrap_or(model);
             client = classify_client(
                 first_string(payload, &["source"]).as_deref(),
                 first_string(payload, &["originator"]).as_deref(),
@@ -221,7 +169,7 @@ fn ingest_session<S: UsageStore>(
             project = project_from_value(payload).unwrap_or(project);
         }
         if kind == "turn_context" {
-            model = first_string(payload, &["model", "model_id"]).unwrap_or(model);
+            model = first_string(payload, &["model", "model_id", "modelId"]).unwrap_or(model);
             project = project_from_value(payload).unwrap_or(project);
         }
         if persist {
@@ -233,11 +181,8 @@ fn ingest_session<S: UsageStore>(
                 provider_id: "codex".into(),
                 agent_name: "codex".into(),
                 session_id: Some(session_id.clone()),
-                event_type: kind.into(),
-                payload_type: payload
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+                event_type: kind.clone(),
+                payload_type: first_string(payload, &["type", "event_type", "eventType", "kind"]),
                 model: Some(model.clone()),
                 client: Some(client.clone()),
                 project: (!project.is_empty()).then(|| project.clone()),
@@ -249,18 +194,22 @@ fn ingest_session<S: UsageStore>(
                 dedup_key: format!("record:{line_id}"),
             })?;
         }
-        if kind == "session_meta" || kind == "turn_context" {
+        if matches!(
+            kind.as_str(),
+            "session_meta" | "turn_context" | "session.started" | "turn.started"
+        ) {
             continue;
         }
         let Some(occurred_at) = occurred_at else {
             continue;
         };
-        if kind == "response_item"
-            && matches!(
-                payload.get("type").and_then(Value::as_str),
-                Some("custom_tool_call") | Some("function_call")
-            )
-        {
+        if matches!(
+            kind.as_str(),
+            "response_item" | "response.item" | "tool_call"
+        ) && matches!(
+            payload.get("type").and_then(Value::as_str),
+            Some("custom_tool_call") | Some("function_call")
+        ) {
             if let Some(name) = payload.get("name").and_then(Value::as_str) {
                 if persist {
                     append_metric(
@@ -300,7 +249,10 @@ fn ingest_session<S: UsageStore>(
             continue;
         }
         if kind == "event_msg"
-            && payload.get("type").and_then(Value::as_str) == Some("user_message")
+            && matches!(
+                first_string(payload, &["type", "event_type", "eventType", "kind"]).as_deref(),
+                Some("user_message" | "user.message" | "prompt")
+            )
         {
             let usage = UsageEvent {
                 event_id: stable_id(&format!("prompt:{line_id}")),
@@ -321,9 +273,13 @@ fn ingest_session<S: UsageStore>(
             }
             continue;
         }
-        if kind == "event_msg" && payload.get("type").and_then(Value::as_str) == Some("token_count")
+        if kind == "event_msg"
+            && matches!(
+                first_string(payload, &["type", "event_type", "eventType", "kind"]).as_deref(),
+                Some("token_count" | "token.count" | "usage" | "token_usage")
+            )
         {
-            let current = counters(payload.get("info"));
+            let current = counters(payload);
             if persist {
                 stats.token_records += 1;
             }
@@ -335,8 +291,8 @@ fn ingest_session<S: UsageStore>(
             if delta.total <= 0 {
                 continue;
             }
-            let event_model =
-                first_string(payload, &["model", "model_id"]).unwrap_or_else(|| model.clone());
+            let event_model = first_string(payload, &["model", "model_id", "modelId"])
+                .unwrap_or_else(|| model.clone());
             let event_id = stable_id(&format!("token:{line_id}"));
             let usage = UsageEvent {
                 event_id: event_id.clone(),
@@ -364,9 +320,13 @@ fn ingest_session<S: UsageStore>(
             }
             continue;
         }
-        if kind == "response_item"
-            && payload.get("type").and_then(Value::as_str) == Some("custom_tool_call")
-            && payload.get("name").and_then(Value::as_str) == Some("apply_patch")
+        if matches!(
+            kind.as_str(),
+            "response_item" | "response.item" | "tool_call"
+        ) && matches!(
+            first_string(payload, &["type", "event_type", "eventType", "kind"]).as_deref(),
+            Some("custom_tool_call" | "function_call" | "tool_call")
+        ) && payload.get("name").and_then(Value::as_str) == Some("apply_patch")
             && let Some(input) = payload.get("input").and_then(Value::as_str)
         {
             let (added, removed) = patch_counts(input);
@@ -445,10 +405,18 @@ fn default_sessions_dir() -> PathBuf {
 }
 
 fn project_from_value(value: &Value) -> Option<String> {
-    let raw = ["cwd", "project", "workspace", "workspace_id", "workdir"]
-        .iter()
-        .find_map(|key| value.get(*key).and_then(Value::as_str))?
-        .trim();
+    let raw = [
+        "cwd",
+        "project",
+        "workspace",
+        "workspace_id",
+        "workspaceId",
+        "workdir",
+        "working_directory",
+    ]
+    .iter()
+    .find_map(|key| value.get(*key).and_then(Value::as_str))?
+    .trim();
     if raw.is_empty() {
         return None;
     }
@@ -476,144 +444,140 @@ fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn parse_session(
-    path: &Path,
-    start: NaiveDate,
-    end: NaiveDate,
-    report: &mut DailyUsage,
-) -> Result<bool> {
-    let content = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let mut previous = Counters::default();
-    let mut model = String::from("unknown");
-    let mut client = String::from("Other");
-    let mut project = String::new();
-    let mut counted = false;
-    for line in content.lines() {
-        let Ok(root) = serde_json::from_str::<Value>(line) else {
-            report.malformed_lines += 1;
-            continue;
-        };
-        let kind = root.get("type").and_then(Value::as_str).unwrap_or_default();
-        let payload = root.get("payload").unwrap_or(&Value::Null);
-        if kind == "session_meta" {
-            model = first_string(payload, &["model", "model_id"]).unwrap_or(model);
-            client = classify_client(
-                first_string(payload, &["source"]).as_deref(),
-                first_string(payload, &["originator"]).as_deref(),
-            );
-            project = project_from_value(payload).unwrap_or(project);
-            continue;
-        }
-        if kind == "turn_context" {
-            model = first_string(payload, &["model", "model_id"]).unwrap_or(model);
-            project = project_from_value(payload).unwrap_or(project);
-            continue;
-        }
-        let timestamp = root
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok());
-        let on_day = timestamp
-            .map(|value| {
-                let date = value.with_timezone(&Local).date_naive();
-                date >= start && date <= end
-            })
-            .unwrap_or(false);
-        if kind == "event_msg"
-            && payload.get("type").and_then(Value::as_str) == Some("user_message")
-        {
-            if on_day {
-                report.prompts += 1;
-            }
-            continue;
-        }
-        if kind == "event_msg" && payload.get("type").and_then(Value::as_str) == Some("token_count")
-        {
-            let current = counters(payload.get("info"));
-            report.token_records += 1;
-            if current == Counters::default() {
-                continue;
-            }
-            let delta = current.saturating_sub(previous);
-            previous = current;
-            if !on_day || delta.total <= 0 {
-                continue;
-            }
-            let event_model =
-                first_string(payload, &["model", "model_id"]).unwrap_or_else(|| model.clone());
-            let breakdown = TokenBreakdown {
-                input: delta.input,
-                output: delta.output,
-                reasoning: delta.reasoning,
-                cache_read: delta.cached,
-                cache_write: delta.cache_write,
-                total: delta.total,
-                cost_usd: estimate_cost(&event_model, delta),
-                ..Default::default()
-            };
-            report.requests += 1;
-            report.input_tokens += delta.input;
-            report.output_tokens += delta.output;
-            report.reasoning_tokens += delta.reasoning;
-            report.cached_input_tokens += delta.cached;
-            report.cache_write_tokens += delta.cache_write;
-            report.total_tokens += delta.total;
-            report.cost_usd += breakdown.cost_usd;
-            add_breakdown(&mut report.models, event_model, breakdown);
-            add_breakdown(&mut report.clients, client.clone(), breakdown);
-            if !project.is_empty() {
-                add_breakdown(&mut report.projects, project.clone(), breakdown);
-            }
-            counted = true;
-            continue;
-        }
-        if kind == "response_item"
-            && on_day
-            && payload.get("type").and_then(Value::as_str) == Some("custom_tool_call")
-        {
-            if let Some(name) = payload.get("name").and_then(Value::as_str) {
-                *report.tools.entry(name.to_owned()).or_default() += 1;
-            }
-            if let Some(input) = payload.get("input").and_then(Value::as_str) {
-                if payload.get("name").and_then(Value::as_str) == Some("apply_patch") {
-                    count_patch(input, report);
-                    count_patch_languages(input, &mut report.languages);
-                } else {
-                    count_tool_languages(input, &mut report.languages);
-                }
-            }
-        }
-    }
-    Ok(counted)
+fn event_kind(root: &Value) -> String {
+    first_string(root, &["type", "event_type", "eventType", "kind"])
+        .or_else(|| {
+            first_string(
+                event_payload(root),
+                &["type", "event_type", "eventType", "kind"],
+            )
+        })
+        .unwrap_or_else(|| "unknown".into())
 }
 
-fn counters(info: Option<&Value>) -> Counters {
-    let Some(usage) = info.and_then(|value| value.get("total_token_usage")) else {
+fn event_payload(root: &Value) -> &Value {
+    ["payload", "data", "event", "details"]
+        .iter()
+        .find_map(|key| root.get(*key).filter(|value| value.is_object()))
+        .unwrap_or(root)
+}
+
+fn event_timestamp(root: &Value) -> Option<DateTime<Utc>> {
+    let value = [root, event_payload(root)]
+        .into_iter()
+        .flat_map(|value| {
+            [
+                "timestamp",
+                "time",
+                "occurred_at",
+                "occurredAt",
+                "created_at",
+                "createdAt",
+            ]
+            .into_iter()
+            .filter_map(move |key| value.get(key))
+        })
+        .next()?;
+    if let Some(value) = value.as_str() {
+        return DateTime::parse_from_rfc3339(value)
+            .ok()
+            .map(|value| value.with_timezone(&Utc));
+    }
+    value
+        .as_i64()
+        .and_then(|millis| DateTime::from_timestamp_millis(millis))
+}
+
+fn counters(value: &Value) -> Counters {
+    let usage = [
+        value.pointer("/info/total_token_usage"),
+        value.pointer("/info/usage"),
+        value.pointer("/total_token_usage"),
+        value.pointer("/token_usage"),
+        value.pointer("/usage"),
+        Some(value),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|candidate| {
+        [
+            "input_tokens",
+            "inputTokens",
+            "prompt_tokens",
+            "promptTokens",
+        ]
+        .iter()
+        .any(|key| candidate.get(*key).is_some())
+    });
+    let Some(usage) = usage else {
         return Counters::default();
     };
     Counters {
-        input: number(usage, "input_tokens"),
-        output: number(usage, "output_tokens"),
-        reasoning: number(usage, "reasoning_output_tokens"),
-        cached: number(usage, "cached_input_tokens"),
-        cache_write: number(usage, "cache_write_tokens"),
-        total: number(usage, "total_tokens"),
+        input: number_any(
+            usage,
+            &[
+                "input_tokens",
+                "inputTokens",
+                "prompt_tokens",
+                "promptTokens",
+            ],
+        ),
+        output: number_any(
+            usage,
+            &[
+                "output_tokens",
+                "outputTokens",
+                "completion_tokens",
+                "completionTokens",
+            ],
+        ),
+        reasoning: number_any(
+            usage,
+            &[
+                "reasoning_output_tokens",
+                "reasoning_tokens",
+                "reasoningTokens",
+            ],
+        ),
+        cached: number_any(
+            usage,
+            &[
+                "cached_input_tokens",
+                "cache_read_tokens",
+                "cachedInputTokens",
+                "cacheReadTokens",
+            ],
+        ),
+        cache_write: number_any(usage, &["cache_write_tokens", "cacheWriteTokens"]),
+        total: number_any(usage, &["total_tokens", "totalTokens", "total"]),
     }
 }
 
-fn number(value: &Value, key: &str) -> i64 {
-    value.get(key).and_then(Value::as_i64).unwrap_or_default()
+fn number_any(value: &Value, keys: &[&str]) -> i64 {
+    keys.iter()
+        .find_map(|key| {
+            value.get(*key).and_then(|value| {
+                value
+                    .as_i64()
+                    .or_else(|| value.as_f64().map(|value| value as i64))
+            })
+        })
+        .unwrap_or_default()
 }
 
 fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
-        value
-            .get(*key)
+        value_at(value, key)
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(str::to_owned)
     })
+}
+
+fn value_at<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    key.split('.')
+        .try_fold(value, |current, part| current.get(part))
 }
 
 fn classify_client(source: Option<&str>, originator: Option<&str>) -> String {
@@ -763,20 +727,6 @@ mod tests {
     use crate::storage::{UsageStore, sqlite::SqliteStore};
 
     #[test]
-    fn aggregates_breakdowns_and_cache_rate() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rollout.jsonl");
-        let mut file = fs::File::create(&path).unwrap();
-        writeln!(file, r#"{{"timestamp":"2026-07-18T23:59:00Z","type":"session_meta","payload":{{"model":"gpt-5.5","source":"vscode","originator":"Codex Desktop"}}}}"#).unwrap();
-        writeln!(file, r#"{{"timestamp":"2026-07-19T05:00:00Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":15,"cached_input_tokens":5,"output_tokens":4,"total_tokens":19}}}}}}}}"#).unwrap();
-        let report = today_usage(Some("2026-07-19"), Some(dir.path().to_str().unwrap())).unwrap();
-        assert_eq!(report.requests, 1);
-        assert!(report.models.contains_key("gpt-5.5"));
-        assert!(report.clients.contains_key("Desktop"));
-        assert_eq!(cache_hit_rate(&report), Some(25.0));
-    }
-
-    #[test]
     fn ingests_only_appended_lines_and_keeps_token_deltas() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rollout.jsonl");
@@ -802,5 +752,48 @@ mod tests {
             .unwrap();
         assert_eq!(summary.total_tokens, 30);
         assert_eq!(summary.requests, 2);
+    }
+
+    #[test]
+    fn accepts_alternate_codex_event_attributes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("alternate.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        writeln!(
+            file,
+            r#"{{"eventType":"session_meta","time":"2026-07-19T05:00:00Z","data":{{"modelId":"gpt-5.5","workspace":"/tmp/flexible-project"}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"eventType":"event_msg","time":"2026-07-19T05:01:00Z","data":{{"eventType":"token.count","usage":{{"inputTokens":10,"outputTokens":5,"totalTokens":15}},"rateLimits":{{"primary":{{"usedPercent":42.5,"windowMinutes":300,"resetsAt":1784476800}}}}}}}}"#
+        )
+        .unwrap();
+
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let stats = ingest_into_store(Some(dir.path().to_str().unwrap()), &mut store).unwrap();
+        assert_eq!(stats.token_records, 1);
+        let summary = store
+            .summary_for_agent(
+                Some("codex"),
+                "2026-07-19T00:00:00Z".parse().unwrap(),
+                "2026-07-20T00:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(summary.total_tokens, 15);
+        assert!(summary.models.contains_key("gpt-5.5"));
+        assert!(summary.projects.contains_key("flexible-project"));
+        assert_eq!(summary.primary_used_percent, Some(42.5));
+        assert_eq!(summary.primary_window_minutes, Some(300));
+
+        let live_status = store
+            .summary_for_agent(
+                Some("codex"),
+                "2026-07-20T00:00:00Z".parse().unwrap(),
+                "2026-07-21T00:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(live_status.total_tokens, 0);
+        assert_eq!(live_status.primary_used_percent, Some(42.5));
     }
 }
