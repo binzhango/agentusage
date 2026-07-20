@@ -88,6 +88,8 @@ struct ProviderData {
     projects: Vec<(String, i64, f64)>,
     tools: Vec<(String, usize)>,
     languages: Vec<(String, usize)>,
+    primary_used_percent: Option<f64>,
+    primary_window_minutes: Option<i64>,
     desktop_signal: Option<(i64, i64)>,
     error: Option<String>,
 }
@@ -424,15 +426,18 @@ impl Dashboard {
         let inner_width = area.width.saturating_sub(2);
         lines.push(Line::from("─".repeat(inner_width as usize)));
         lines.push(section_line("⚡ Usage", Color::Yellow, inner_width));
-        lines.push(Line::from(bar_line(
-            "Usage",
-            provider.total_tokens,
-            self.total_tokens().max(provider.total_tokens),
-            area.width.saturating_sub(22) as usize,
-        )));
         lines.push(Line::from(format!(
-            "requests {} · prompts {} · +{} -{}",
-            provider.requests, provider.prompts, provider.lines_added, provider.lines_removed
+            "Status {} · volume {} · token records {} · prompts {} · +{} -{}",
+            usage_status(provider),
+            compact(provider.total_tokens),
+            provider.requests,
+            provider.prompts,
+            provider.lines_added,
+            provider.lines_removed
+        )));
+        lines.push(Line::from(rate_limit_bar(
+            provider.primary_used_percent,
+            area.width.saturating_sub(22) as usize,
         )));
         lines.push(Line::from(""));
         lines.push(section_line("💰 Spending", Color::Green, inner_width));
@@ -684,21 +689,19 @@ impl Dashboard {
         } else {
             let cached = cache_rate(provider);
             lines.push(Line::from(format!(
-                "Prompts: {} prompts    Requests: {}",
+                "Prompts: {} prompts    Token records: {}",
                 provider.prompts, provider.requests
             )));
             lines.push(Line::from(format!(
                 "Model Burn   {} tok",
                 compact(provider.total_tokens)
             )));
-            lines.push(Line::from(bar_line(
-                "Usage",
-                provider.total_tokens,
-                self.total_tokens(),
+            lines.push(Line::from(rate_limit_bar(
+                provider.primary_used_percent,
                 area.width.saturating_sub(18) as usize,
             )));
             lines.push(Line::from(format!(
-                "Sessions {} · {} req · +{} -{}",
+                "Sessions {} · {} token records · +{} -{}",
                 provider.sessions, provider.requests, provider.lines_added, provider.lines_removed
             )));
             lines.push(Line::from(format!(
@@ -986,6 +989,12 @@ fn load_provider(
     }
     match crate::report_for_period(name, start, end, None, backend) {
         Ok(report) => {
+            let rate_limit = if ingest && backend != crate::storage::BackendMode::Jsonl {
+                let cached = load_cached_provider(name, start, end, backend);
+                (cached.primary_used_percent, cached.primary_window_minutes)
+            } else {
+                (None, None)
+            };
             let mut models: Vec<_> = report
                 .models
                 .into_iter()
@@ -1033,6 +1042,8 @@ fn load_provider(
                 projects,
                 tools,
                 languages,
+                primary_used_percent: rate_limit.0,
+                primary_window_minutes: rate_limit.1,
                 desktop_signal: report
                     .desktop_usage
                     .map(|d| (d.five_hour_signal, d.seven_day_signal)),
@@ -1113,6 +1124,8 @@ fn load_cached_provider(
                 projects,
                 tools,
                 languages,
+                primary_used_percent: summary.primary_used_percent,
+                primary_window_minutes: summary.primary_window_minutes,
                 desktop_signal: (name == "claude_code")
                     .then(crate::providers::local::desktop_usage)
                     .flatten()
@@ -1194,23 +1207,29 @@ fn cache_rate(provider: &ProviderData) -> Option<f64> {
     (denominator > 0).then(|| provider.cache_read_tokens as f64 / denominator as f64 * 100.0)
 }
 
-fn bar_line(label: &str, value: i64, total: i64, width: usize) -> String {
-    let width = width.max(10);
-    let filled = if total > 0 {
-        ((value.max(0) as f64 / total as f64) * width as f64).round() as usize
-    } else {
-        0
+fn usage_status(provider: &ProviderData) -> String {
+    match (
+        provider.primary_used_percent,
+        provider.primary_window_minutes,
+    ) {
+        (Some(used), Some(window)) => {
+            format!("{used:.1}% used · {}d window", window / 1440)
+        }
+        _ => "quota unavailable".into(),
     }
-    .min(width);
+}
+
+fn rate_limit_bar(used: Option<f64>, width: usize) -> String {
+    let width = width.max(10);
+    let Some(used) = used else {
+        return format!("Usage     {} quota unavailable", "·".repeat(width));
+    };
+    let filled = ((used / 100.0).clamp(0.0, 1.0) * width as f64).round() as usize;
     format!(
-        "{label:<8} {}{} {:>4.1}%",
+        "Usage     {}{} {:>4.1}%",
         "█".repeat(filled),
         "·".repeat(width - filled),
-        if total > 0 {
-            value as f64 / total as f64 * 100.0
-        } else {
-            0.0
-        }
+        used
     )
 }
 

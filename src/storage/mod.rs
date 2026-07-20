@@ -115,6 +115,9 @@ pub struct UsageSummary {
     pub projects: BTreeMap<String, UsageBucket>,
     pub tools: BTreeMap<String, i64>,
     pub languages: BTreeMap<String, i64>,
+    pub primary_used_percent: Option<f64>,
+    pub primary_window_minutes: Option<i64>,
+    pub primary_resets_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -141,6 +144,12 @@ impl UsageSummary {
 }
 
 pub trait UsageStore {
+    fn begin_batch(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn end_batch(&mut self) -> Result<()> {
+        Ok(())
+    }
     fn append_record(&mut self, record: &IngestRecord) -> Result<bool> {
         let _ = record;
         Ok(false)
@@ -279,6 +288,20 @@ pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<Backe
 }
 
 impl UsageStore for Backend {
+    fn begin_batch(&mut self) -> Result<()> {
+        match self {
+            Self::Sqlite(store) => store.begin_batch(),
+            Self::Postgres(store) => store.begin_batch(),
+        }
+    }
+
+    fn end_batch(&mut self) -> Result<()> {
+        match self {
+            Self::Sqlite(store) => store.end_batch(),
+            Self::Postgres(store) => store.end_batch(),
+        }
+    }
+
     fn append_record(&mut self, record: &IngestRecord) -> Result<bool> {
         match self {
             Self::Sqlite(store) => store.append_record(record),
