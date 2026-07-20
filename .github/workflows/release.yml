@@ -182,8 +182,9 @@ jobs:
         run: |
           mkdir dist
           cp "target/${{ matrix.target }}/release/agentusage" dist/agentusage
+          cp "target/${{ matrix.target }}/release/au" dist/au
           cp CHANGELOG.md LICENSE README.md dist/
-          tar -C dist -czf "${{ matrix.archive }}" agentusage CHANGELOG.md LICENSE README.md
+          tar -C dist -czf "${{ matrix.archive }}" agentusage au CHANGELOG.md LICENSE README.md
 
       - name: Package Windows archive
         if: runner.os == 'Windows'
@@ -191,8 +192,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/agentusage.exe" dist/agentusage.exe
+          Copy-Item "target/${{ matrix.target }}/release/au.exe" dist/au.exe
           Copy-Item CHANGELOG.md,LICENSE,README.md dist/
-          Compress-Archive -Path dist/agentusage.exe,dist/CHANGELOG.md,dist/LICENSE,dist/README.md -DestinationPath "${{ matrix.archive }}"
+          Compress-Archive -Path dist/agentusage.exe,dist/au.exe,dist/CHANGELOG.md,dist/LICENSE,dist/README.md -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload archive
         uses: actions/upload-artifact@v6

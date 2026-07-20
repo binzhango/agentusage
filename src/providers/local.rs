@@ -101,6 +101,7 @@ pub fn ingest_into_store<S: UsageStore>(
         let key = path.to_string_lossy().into_owned();
         if let Some(cursor) = store.cursor(&key)?
             && cursor.file_size == size
+            && cursor.last_event_hash.as_deref() == Some("project-v2")
         {
             continue;
         }
@@ -116,7 +117,7 @@ pub fn ingest_into_store<S: UsageStore>(
             path: key,
             byte_offset: size,
             file_size: size,
-            last_event_hash: None,
+            last_event_hash: Some("project-v2".into()),
             updated_at: Utc::now(),
         })?;
     }
@@ -157,6 +158,11 @@ fn ingest_claude_file<S: UsageStore>(
             continue;
         };
         let model = message.model.unwrap_or_else(|| "unknown".into());
+        let project = entry
+            .cwd
+            .as_deref()
+            .and_then(project_name)
+            .or_else(|| project_from_path(path));
         let input = usage.input_tokens;
         let output = usage.output_tokens;
         let cache_read = usage.cache_read_input_tokens;
@@ -171,6 +177,7 @@ fn ingest_claude_file<S: UsageStore>(
             session_id: entry.session_id,
             model: Some(model.clone()),
             client: Some("CLI".into()),
+            project,
             input_tokens: input,
             output_tokens: output,
             reasoning_tokens: usage.reasoning_tokens,
@@ -241,6 +248,10 @@ fn ingest_opencode_file<S: UsageStore>(
             session_id: session,
             model: string(info, "modelID"),
             client: Some("OpenCode".into()),
+            project: string(info, "cwd")
+                .or_else(|| string(info, "workspace"))
+                .as_deref()
+                .and_then(project_name),
             input_tokens: input,
             output_tokens: output,
             reasoning_tokens: reasoning,
@@ -269,6 +280,8 @@ struct ClaudeEntry {
     #[serde(rename = "requestId")]
     request_id: Option<String>,
     message: Option<ClaudeMessage>,
+    #[serde(default)]
+    cwd: Option<String>,
 }
 #[derive(Deserialize)]
 struct ClaudeMessage {
@@ -324,6 +337,22 @@ fn string(value: &Value, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+}
+
+fn project_name(value: &str) -> Option<String> {
+    let path = Path::new(value.trim());
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
+fn project_from_path(path: &Path) -> Option<String> {
+    path.parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
         .map(str::to_owned)
 }
 fn number(value: Option<&Value>) -> i64 {

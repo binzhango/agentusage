@@ -4,11 +4,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    collections::BTreeSet,
     env, fs,
     path::{Path, PathBuf},
 };
 
-use crate::storage::{RawEvent, UsageEvent, UsageStore};
+use crate::storage::{IngestRecord, RawEvent, UsageEvent, UsageMetric, UsageStore};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct TokenBreakdown {
@@ -46,6 +47,9 @@ pub struct DailyUsage {
     pub lines_removed: i64,
     pub models: BTreeMap<String, TokenBreakdown>,
     pub clients: BTreeMap<String, TokenBreakdown>,
+    pub projects: BTreeMap<String, TokenBreakdown>,
+    pub tools: BTreeMap<String, usize>,
+    pub languages: BTreeMap<String, usize>,
     pub files_scanned: usize,
     pub files_with_usage: usize,
     pub token_records: usize,
@@ -132,6 +136,7 @@ pub fn ingest_into_store<S: UsageStore>(
         let file_size = fs::metadata(&path)?.len() as i64;
         if let Some(cursor) = store.cursor(&path.to_string_lossy())?
             && cursor.file_size == file_size
+            && cursor.last_event_hash.as_deref() == Some("project-v5")
         {
             continue;
         }
@@ -145,7 +150,7 @@ pub fn ingest_into_store<S: UsageStore>(
             path: path.to_string_lossy().into_owned(),
             byte_offset: file_size,
             file_size,
-            last_event_hash: None,
+            last_event_hash: Some("project-v5".into()),
             updated_at: Utc::now(),
         })?;
     }
@@ -162,6 +167,7 @@ fn ingest_session<S: UsageStore>(
     let mut previous = Counters::default();
     let mut model = String::from("unknown");
     let mut client = String::from("Other");
+    let mut project = String::new();
     for (line_number, line) in content.lines().enumerate() {
         let Ok(root) = serde_json::from_str::<Value>(line) else {
             stats.malformed_lines += 1;
@@ -169,27 +175,93 @@ fn ingest_session<S: UsageStore>(
         };
         let kind = root.get("type").and_then(Value::as_str).unwrap_or_default();
         let payload = root.get("payload").unwrap_or(&Value::Null);
+        let occurred_at = root
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc));
+        let line_id = format!("{}:{line_number}", path.display());
         if kind == "session_meta" {
             model = first_string(payload, &["model", "model_id"]).unwrap_or(model);
             client = classify_client(
                 first_string(payload, &["source"]).as_deref(),
                 first_string(payload, &["originator"]).as_deref(),
             );
-            continue;
+            project = project_from_value(payload).unwrap_or(project);
         }
         if kind == "turn_context" {
             model = first_string(payload, &["model", "model_id"]).unwrap_or(model);
+            project = project_from_value(payload).unwrap_or(project);
+        }
+        store.append_record(&IngestRecord {
+            record_id: stable_id(&format!("record:{line_id}")),
+            source_path: path.to_string_lossy().into_owned(),
+            line_number: line_number as i64,
+            occurred_at,
+            provider_id: "codex".into(),
+            agent_name: "codex".into(),
+            session_id: Some(session_id.clone()),
+            event_type: kind.into(),
+            payload_type: payload
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            model: Some(model.clone()),
+            client: Some(client.clone()),
+            project: (!project.is_empty()).then(|| project.clone()),
+            tool_name: payload
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            payload: root.clone(),
+            dedup_key: format!("record:{line_id}"),
+        })?;
+        if kind == "session_meta" || kind == "turn_context" {
             continue;
         }
-        let Some(occurred_at) = root
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc))
-        else {
+        let Some(occurred_at) = occurred_at else {
             continue;
         };
-        let line_id = format!("{}:{line_number}", path.display());
+        if kind == "response_item"
+            && matches!(
+                payload.get("type").and_then(Value::as_str),
+                Some("custom_tool_call") | Some("function_call")
+            )
+        {
+            if let Some(name) = payload.get("name").and_then(Value::as_str) {
+                append_metric(
+                    store,
+                    &session_id,
+                    occurred_at,
+                    "tool",
+                    name,
+                    &format!("{line_id}:tool:{name}"),
+                )?;
+            }
+            if let Some(input) = payload
+                .get("input")
+                .or_else(|| payload.get("arguments"))
+                .and_then(Value::as_str)
+            {
+                let mut languages = BTreeMap::new();
+                if payload.get("name").and_then(Value::as_str) == Some("apply_patch") {
+                    count_patch_languages(input, &mut languages);
+                } else {
+                    count_tool_languages(input, &mut languages);
+                }
+                for language in languages.keys() {
+                    append_metric(
+                        store,
+                        &session_id,
+                        occurred_at,
+                        "language_v2",
+                        language,
+                        &format!("{line_id}:language-v2:{language}"),
+                    )?;
+                }
+            }
+            continue;
+        }
         if kind == "event_msg"
             && payload.get("type").and_then(Value::as_str) == Some("user_message")
         {
@@ -201,6 +273,7 @@ fn ingest_session<S: UsageStore>(
                 session_id: Some(session_id.clone()),
                 model: Some(model.clone()),
                 client: Some(client.clone()),
+                project: (!project.is_empty()).then(|| project.clone()),
                 prompts: 1,
                 dedup_key: stable_id(&format!("prompt:{line_id}")),
                 raw_event_id: stable_id(&format!("raw:prompt:{line_id}")),
@@ -234,6 +307,7 @@ fn ingest_session<S: UsageStore>(
                 session_id: Some(session_id.clone()),
                 model: Some(event_model.clone()),
                 client: Some(client.clone()),
+                project: (!project.is_empty()).then(|| project.clone()),
                 input_tokens: delta.input,
                 output_tokens: delta.output,
                 reasoning_tokens: delta.reasoning,
@@ -269,6 +343,7 @@ fn ingest_session<S: UsageStore>(
                 session_id: Some(session_id.clone()),
                 model: Some(model.clone()),
                 client: Some(client.clone()),
+                project: (!project.is_empty()).then(|| project.clone()),
                 lines_added: added,
                 lines_removed: removed,
                 dedup_key: event_id,
@@ -296,6 +371,27 @@ fn append_event<S: UsageStore>(store: &mut S, payload: &Value, event: &UsageEven
     store.append_usage_event(event)
 }
 
+fn append_metric<S: UsageStore>(
+    store: &mut S,
+    session_id: &str,
+    occurred_at: DateTime<Utc>,
+    dimension: &str,
+    name: &str,
+    dedup_key: &str,
+) -> Result<()> {
+    store.append_metric(&UsageMetric {
+        metric_id: stable_id(&format!("metric:{dedup_key}")),
+        occurred_at,
+        provider_id: "codex".into(),
+        agent_name: "codex".into(),
+        session_id: Some(session_id.to_owned()),
+        dimension: dimension.into(),
+        name: name.into(),
+        dedup_key: dedup_key.into(),
+    })?;
+    Ok(())
+}
+
 fn stable_id(value: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(value.as_bytes());
@@ -307,6 +403,22 @@ fn default_sessions_dir() -> PathBuf {
         .or_else(|_| env::var("USERPROFILE"))
         .unwrap_or_default();
     PathBuf::from(home).join(".codex").join("sessions")
+}
+
+fn project_from_value(value: &Value) -> Option<String> {
+    let raw = ["cwd", "project", "workspace", "workspace_id", "workdir"]
+        .iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))?
+        .trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let path = Path::new(raw);
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .or_else(|| Some(raw.to_owned()))
 }
 
 fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -335,6 +447,7 @@ fn parse_session(
     let mut previous = Counters::default();
     let mut model = String::from("unknown");
     let mut client = String::from("Other");
+    let mut project = String::new();
     let mut counted = false;
     for line in content.lines() {
         let Ok(root) = serde_json::from_str::<Value>(line) else {
@@ -349,10 +462,12 @@ fn parse_session(
                 first_string(payload, &["source"]).as_deref(),
                 first_string(payload, &["originator"]).as_deref(),
             );
+            project = project_from_value(payload).unwrap_or(project);
             continue;
         }
         if kind == "turn_context" {
             model = first_string(payload, &["model", "model_id"]).unwrap_or(model);
+            project = project_from_value(payload).unwrap_or(project);
             continue;
         }
         let timestamp = root
@@ -407,16 +522,27 @@ fn parse_session(
             report.cost_usd += breakdown.cost_usd;
             add_breakdown(&mut report.models, event_model, breakdown);
             add_breakdown(&mut report.clients, client.clone(), breakdown);
+            if !project.is_empty() {
+                add_breakdown(&mut report.projects, project.clone(), breakdown);
+            }
             counted = true;
             continue;
         }
         if kind == "response_item"
             && on_day
             && payload.get("type").and_then(Value::as_str) == Some("custom_tool_call")
-            && payload.get("name").and_then(Value::as_str) == Some("apply_patch")
-            && let Some(input) = payload.get("input").and_then(Value::as_str)
         {
-            count_patch(input, report);
+            if let Some(name) = payload.get("name").and_then(Value::as_str) {
+                *report.tools.entry(name.to_owned()).or_default() += 1;
+            }
+            if let Some(input) = payload.get("input").and_then(Value::as_str) {
+                if payload.get("name").and_then(Value::as_str) == Some("apply_patch") {
+                    count_patch(input, report);
+                    count_patch_languages(input, &mut report.languages);
+                } else {
+                    count_tool_languages(input, &mut report.languages);
+                }
+            }
         }
     }
     Ok(counted)
@@ -496,6 +622,65 @@ fn count_patch(input: &str, report: &mut DailyUsage) {
     let (added, removed) = patch_counts(input);
     report.lines_added += added;
     report.lines_removed += removed;
+}
+
+fn count_patch_languages(input: &str, languages: &mut BTreeMap<String, usize>) {
+    let mut seen = BTreeSet::new();
+    for line in input.lines() {
+        let path = line
+            .strip_prefix("+++ b/")
+            .or_else(|| line.strip_prefix("*** Update File: "))
+            .or_else(|| line.strip_prefix("*** Add File: "))
+            .or_else(|| line.strip_prefix("*** Delete File: "));
+        let Some(path) = path else { continue };
+        add_language(path, &mut seen, languages);
+    }
+}
+
+fn count_tool_languages(input: &str, languages: &mut BTreeMap<String, usize>) {
+    let mut seen = BTreeSet::new();
+    for token in input.split_whitespace() {
+        let token = token.trim_matches(|character: char| {
+            matches!(character, '"' | '\'' | '`' | ',' | ';' | ')' | ']' | '}')
+        });
+        if token.contains('/') || token.starts_with('.') {
+            add_language(token, &mut seen, languages);
+        }
+    }
+}
+
+fn add_language(path: &str, seen: &mut BTreeSet<String>, languages: &mut BTreeMap<String, usize>) {
+    let path = path
+        .trim()
+        .split("\\n")
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .next()
+        .unwrap_or_default();
+    let Some(extension) = Path::new(path).extension().and_then(|value| value.to_str()) else {
+        return;
+    };
+    let extension = extension.to_ascii_lowercase();
+    let language = match extension.as_str() {
+        "rs" => "rust",
+        "py" => "python",
+        "js" | "jsx" => "javascript",
+        "ts" | "tsx" => "typescript",
+        "md" | "mdx" => "markdown",
+        "json" => "json",
+        "toml" => "toml",
+        "yaml" | "yml" => "yaml",
+        "sh" | "bash" => "shell",
+        "go" => "go",
+        "java" => "java",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "hpp" => "cpp",
+        _ => return,
+    };
+    if seen.insert(language.to_owned()) {
+        *languages.entry(language.to_owned()).or_default() += 1;
+    }
 }
 
 fn patch_counts(input: &str) -> (i64, i64) {

@@ -14,11 +14,20 @@ you explicitly configure a PostgreSQL server.
 > **Project status:** early access. Provider adapters and report fields are
 > still expanding. Feedback and fixtures are welcome.
 
+## Roadmap
+
+- [ ] Add Google Antigravity CLI usage support.
+- [ ] Expand the local web server into a fully interactive dashboard with richer
+  filtering, provider detail views, and responsive usage exploration.
+- [ ] Add a `config.toml` onboarding flow for discovering and configuring multiple
+  agent sources in one place.
+
 ## Highlights
 
 - Daily, weekly, monthly, yearly, and arbitrary date-range reports.
 - Input, output, reasoning, cache-read, cache-write, and total-token breakdowns.
 - Model and client attribution, including CLI, IDE, Desktop, and Copilot usage.
+- Project/workspace, tool-call, and language breakdowns where provider data is available.
 - SQLite by default, with optional PostgreSQL storage.
 - Idempotent ingestion, raw-event preservation, and incremental processing.
 - Copilot CLI and VS Code Copilot model, token, and AI-credit tracking.
@@ -38,8 +47,13 @@ curl -fL -o agentusage.tar.gz \
   https://github.com/binzhango/agentusage/releases/latest/download/agentusage-macos-aarch64.tar.gz
 tar -xzf agentusage.tar.gz
 sudo install -m 0755 agentusage /usr/local/bin/agentusage
+sudo install -m 0755 au /usr/local/bin/au
 agentusage --version
+au --version
 ```
+
+`au` is an executable alias for `agentusage`; both commands support the same
+dashboard, server, report, and telemetry subcommands.
 
 Available release targets:
 
@@ -56,8 +70,25 @@ in a production environment.
 ## Quick start
 
 ```bash
-agentusage daily
+agentusage dashboard
 ```
+
+`agentusage dashboard` opens the interactive terminal dashboard. It shows
+Codex, Claude Code, OpenCode, and Copilot usage together. Use `w` to cycle
+Today, 7 days, 30 days, and all-time windows, `r` to refresh, and `q` to quit.
+The dashboard requires an interactive terminal.
+
+Running `agentusage` without a subcommand prints help. The local browser
+dashboard is available with:
+
+```bash
+agentusage server
+agentusage server --open
+```
+
+The server listens on `127.0.0.1:8787` by default and serves the dashboard UI
+and JSON API without exposing usage data to the network. Use `--host` and
+`--port` to change the bind address when needed.
 
 On first use, the CLI checks for an initialized database. If none exists, it
 asks whether to initialize SQLite, use PostgreSQL, or continue with the JSONL
@@ -65,14 +96,19 @@ fallback. Non-interactive invocations do not silently initialize a database.
 
 ## Reports
 
-All report commands accept `--provider`.
+Detailed reports are available under `agentusage command`. The original period
+commands remain supported as compatibility aliases. All report commands accept
+`--provider`.
 
 ```bash
 # Today
+agentusage command daily --provider codex
+agentusage command daily --provider claude_code
+agentusage command daily --provider opencode
+agentusage command daily --provider copilot
+
+# Compatibility alias
 agentusage daily --provider codex
-agentusage daily --provider claude_code
-agentusage daily --provider opencode
-agentusage daily --provider copilot
 
 # Specific date
 agentusage daily --provider codex --date 2026-07-19
@@ -87,12 +123,18 @@ agentusage range --provider copilot \
   --from 2026-07-01 --to 2026-07-19
 ```
 
+The server API is available at `/api/providers` and
+`/api/summary?provider=codex&window=today`. Supported windows are `today`,
+`7d`, `30d`, and `all`.
+
 Reports include:
 
 - requests, prompts, sessions, lines added, and lines removed;
 - input, output, reasoning, cache-read, cache-write, and total tokens;
 - estimated cost and cache-hit rate when pricing data is available;
 - model and client breakdowns;
+- project/workspace breakdowns when provider metadata includes a working directory;
+- tool-call and language breakdowns for imported provider telemetry;
 - Copilot AI credits and native AI-unit values when the source provides them.
 
 Codex can read an alternate rollout-log directory:
@@ -183,6 +225,10 @@ agentusage telemetry daemon --db-path /path/to/telemetry.db
 
 ```text
 agentusage --help
+agentusage dashboard --help
+agentusage server --help
+agentusage command --help
+agentusage command daily --help
 agentusage daily --help
 agentusage weekly --help
 agentusage monthly --help
@@ -190,6 +236,10 @@ agentusage yearly --help
 agentusage range --help
 agentusage telemetry --help
 ```
+
+Running `agentusage` without a subcommand prints this help. Use
+`agentusage dashboard` for the terminal UI and `agentusage server` for the
+browser UI.
 
 ## Privacy and data safety
 
