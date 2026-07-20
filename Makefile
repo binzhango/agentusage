@@ -1,4 +1,4 @@
-.PHONY: fmt check test lint package build ci
+.PHONY: fmt check test lint package build install ci
 
 fmt:
 	cargo fmt --all -- --check
@@ -17,5 +17,8 @@ package:
 
 build:
 	cargo build --release --locked
+
+install:
+	cargo install --path . --locked --bins
 
 ci: fmt check test lint package
