@@ -27,6 +27,7 @@ jobs:
             .github
             Cargo.toml
             Cargo.lock
+            rust-toolchain.toml
             CHANGELOG.md
             LICENSE
             Makefile
@@ -36,7 +37,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt, clippy
 
@@ -160,6 +161,7 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.revision }}
           sparse-checkout: |
+            rust-toolchain.toml
             Cargo.toml
             Cargo.lock
             CHANGELOG.md
@@ -168,7 +170,7 @@ jobs:
             src
 
       - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ matrix.target }}
 

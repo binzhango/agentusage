@@ -268,12 +268,11 @@ impl Dashboard {
                 self.refresh(self.tx.clone(), true);
             }
             terminal.draw(|frame| self.render(frame))?;
-            if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if self.handle_key(key) {
-                        break;
-                    }
-                }
+            if event::poll(Duration::from_millis(100))?
+                && let Event::Key(key) = event::read()?
+                && self.handle_key(key)
+            {
+                break;
             }
         }
         Ok(())

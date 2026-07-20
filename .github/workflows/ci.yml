@@ -25,6 +25,7 @@ jobs:
             .github
             Cargo.toml
             Cargo.lock
+            rust-toolchain.toml
             CHANGELOG.md
             LICENSE
             Makefile
@@ -33,7 +34,7 @@ jobs:
             src
 
       - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt, clippy
 
@@ -58,6 +59,12 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit dependencies
+        run: cargo audit
 
       - name: Check package boundary
         run: cargo package --locked --allow-dirty
