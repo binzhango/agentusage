@@ -86,6 +86,12 @@ enum Command {
         #[arg(long)]
         sessions_dir: Option<String>,
     },
+    Ingest {
+        #[arg(long, default_value = "codex")]
+        provider: String,
+        #[arg(long)]
+        sessions_dir: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -280,6 +286,10 @@ fn main() -> Result<()> {
             )?);
             Ok(())
         }
+        Some(Command::Ingest {
+            provider,
+            sessions_dir,
+        }) => run_ingest(&provider, sessions_dir.as_deref()),
     }
 }
 
@@ -397,6 +407,50 @@ fn prepare_report_backend(provider: &str) -> Result<storage::BackendMode> {
     Ok(backend)
 }
 
+fn run_ingest(provider: &str, sessions_dir: Option<&str>) -> Result<()> {
+    validate_provider(provider)?;
+    let backend = prepare_report_backend(provider)?;
+    if backend == storage::BackendMode::Jsonl {
+        anyhow::bail!("{provider} ingestion requires SQLite or PostgreSQL storage");
+    }
+    let mut store = storage::Backend::open_for_agent(backend, provider)?;
+    let (files_scanned, files_with_usage, token_records, malformed_lines) = match provider {
+        "codex" => {
+            let stats = providers::codex::ingest_into_store(sessions_dir, &mut store)?;
+            (
+                stats.files_scanned,
+                stats.files_with_usage,
+                stats.token_records,
+                stats.malformed_lines,
+            )
+        }
+        "claude" | "claude_code" => providers::local::ingest_into_store(
+            providers::local::Agent::ClaudeCode,
+            sessions_dir,
+            &mut store,
+        )?,
+        "opencode" | "open_code" => providers::local::ingest_into_store(
+            providers::local::Agent::OpenCode,
+            sessions_dir,
+            &mut store,
+        )?,
+        "copilot" => {
+            let stats = providers::copilot::ingest_into_store(None, &mut store)?;
+            (
+                stats.files_scanned,
+                stats.files_with_usage,
+                stats.token_records,
+                stats.malformed_lines,
+            )
+        }
+        _ => unreachable!(),
+    };
+    eprintln!(
+        "[agentusage] ingested provider={provider} files_scanned={files_scanned} files_with_usage={files_with_usage} token_records={token_records} malformed_lines={malformed_lines}"
+    );
+    Ok(())
+}
+
 fn report_for_period(
     provider: &str,
     start: NaiveDate,
@@ -411,38 +465,8 @@ fn report_for_period(
         return providers::codex::usage_between(start, end, sessions_dir);
     }
 
-    let mut store = storage::Backend::open_for_agent(backend, provider)?;
-    let (files_scanned, files_with_usage, token_records, malformed_lines) = match provider {
-        "codex" => {
-            let s = providers::codex::ingest_into_store(sessions_dir, &mut store)?;
-            (
-                s.files_scanned,
-                s.files_with_usage,
-                s.token_records,
-                s.malformed_lines,
-            )
-        }
-        "claude" | "claude_code" => providers::local::ingest_into_store(
-            providers::local::Agent::ClaudeCode,
-            sessions_dir,
-            &mut store,
-        )?,
-        "opencode" | "open_code" => providers::local::ingest_into_store(
-            providers::local::Agent::OpenCode,
-            sessions_dir,
-            &mut store,
-        )?,
-        "copilot" => {
-            let s = providers::copilot::ingest_into_store(None, &mut store)?;
-            (
-                s.files_scanned,
-                s.files_with_usage,
-                s.token_records,
-                s.malformed_lines,
-            )
-        }
-        _ => anyhow::bail!("unsupported provider {provider}"),
-    };
+    let mut store = storage::Backend::open_read_only_for_agent(backend, provider)?;
+    let (files_scanned, files_with_usage, token_records, malformed_lines) = (0, 0, 0, 0);
     let from = local_midnight_utc(start);
     let to = local_midnight_utc(end + chrono::Duration::days(1));
     let summary = storage::UsageStore::summary_for_agent(

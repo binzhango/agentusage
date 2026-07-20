@@ -6,6 +6,7 @@ use std::{
     collections::BTreeMap,
     collections::BTreeSet,
     env, fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
 
@@ -131,46 +132,76 @@ pub fn ingest_into_store<S: UsageStore>(
         .map(PathBuf::from)
         .unwrap_or_else(default_sessions_dir);
     let mut stats = IngestStats::default();
+    store.begin_batch()?;
     for path in jsonl_files(&root)? {
         stats.files_scanned += 1;
         let file_size = fs::metadata(&path)?.len() as i64;
-        if let Some(cursor) = store.cursor(&path.to_string_lossy())?
+        let cursor = store.cursor(&path.to_string_lossy())?;
+        if let Some(cursor) = cursor.as_ref()
             && cursor.file_size == file_size
+            && cursor.byte_offset == file_size
             && cursor.last_event_hash.as_deref() == Some("project-v5")
         {
             continue;
         }
+        let start_offset = cursor
+            .filter(|value| value.byte_offset <= file_size)
+            .map(|value| value.byte_offset.max(0) as u64)
+            .unwrap_or(0);
         let token_records_before = stats.token_records;
         let before = stats.events_inserted;
-        ingest_session(&path, store, &mut stats)?;
+        let processed_offset = ingest_session(&path, start_offset, store, &mut stats)?;
         if stats.token_records > token_records_before || stats.events_inserted > before {
             stats.files_with_usage += 1;
         }
         store.save_cursor(&crate::storage::FileCursor {
             path: path.to_string_lossy().into_owned(),
-            byte_offset: file_size,
+            byte_offset: processed_offset as i64,
             file_size,
             last_event_hash: Some("project-v5".into()),
             updated_at: Utc::now(),
         })?;
     }
+    store.end_batch()?;
     Ok(stats)
 }
 
 fn ingest_session<S: UsageStore>(
     path: &Path,
+    start_offset: u64,
     store: &mut S,
     stats: &mut IngestStats,
-) -> Result<()> {
-    let content = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+) -> Result<u64> {
+    let file = fs::File::open(path).with_context(|| format!("read {}", path.display()))?;
+    let mut reader = BufReader::new(file);
     let session_id = stable_id(&format!("session:{}", path.display()));
     let mut previous = Counters::default();
     let mut model = String::from("unknown");
     let mut client = String::from("Other");
     let mut project = String::new();
-    for (line_number, line) in content.lines().enumerate() {
+    let mut line_number = 0usize;
+    let mut byte_offset = 0u64;
+    let mut last_complete_offset = 0u64;
+    let mut buffer = String::new();
+    loop {
+        buffer.clear();
+        let bytes_read = reader.read_line(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        byte_offset += bytes_read as u64;
+        let complete_line = buffer.ends_with('\n');
+        if complete_line {
+            last_complete_offset = byte_offset;
+        }
+        let persist = complete_line && byte_offset > start_offset;
+        let line = buffer.trim_end_matches(['\r', '\n']);
+        let current_line_number = line_number;
+        line_number += 1;
         let Ok(root) = serde_json::from_str::<Value>(line) else {
-            stats.malformed_lines += 1;
+            if persist {
+                stats.malformed_lines += 1;
+            }
             continue;
         };
         let kind = root.get("type").and_then(Value::as_str).unwrap_or_default();
@@ -180,7 +211,7 @@ fn ingest_session<S: UsageStore>(
             .and_then(Value::as_str)
             .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
             .map(|value| value.with_timezone(&Utc));
-        let line_id = format!("{}:{line_number}", path.display());
+        let line_id = format!("{}:{current_line_number}", path.display());
         if kind == "session_meta" {
             model = first_string(payload, &["model", "model_id"]).unwrap_or(model);
             client = classify_client(
@@ -193,29 +224,31 @@ fn ingest_session<S: UsageStore>(
             model = first_string(payload, &["model", "model_id"]).unwrap_or(model);
             project = project_from_value(payload).unwrap_or(project);
         }
-        store.append_record(&IngestRecord {
-            record_id: stable_id(&format!("record:{line_id}")),
-            source_path: path.to_string_lossy().into_owned(),
-            line_number: line_number as i64,
-            occurred_at,
-            provider_id: "codex".into(),
-            agent_name: "codex".into(),
-            session_id: Some(session_id.clone()),
-            event_type: kind.into(),
-            payload_type: payload
-                .get("type")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            model: Some(model.clone()),
-            client: Some(client.clone()),
-            project: (!project.is_empty()).then(|| project.clone()),
-            tool_name: payload
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            payload: root.clone(),
-            dedup_key: format!("record:{line_id}"),
-        })?;
+        if persist {
+            store.append_record(&IngestRecord {
+                record_id: stable_id(&format!("record:{line_id}")),
+                source_path: path.to_string_lossy().into_owned(),
+                line_number: line_number as i64,
+                occurred_at,
+                provider_id: "codex".into(),
+                agent_name: "codex".into(),
+                session_id: Some(session_id.clone()),
+                event_type: kind.into(),
+                payload_type: payload
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                model: Some(model.clone()),
+                client: Some(client.clone()),
+                project: (!project.is_empty()).then(|| project.clone()),
+                tool_name: payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                payload: root.clone(),
+                dedup_key: format!("record:{line_id}"),
+            })?;
+        }
         if kind == "session_meta" || kind == "turn_context" {
             continue;
         }
@@ -229,14 +262,16 @@ fn ingest_session<S: UsageStore>(
             )
         {
             if let Some(name) = payload.get("name").and_then(Value::as_str) {
-                append_metric(
-                    store,
-                    &session_id,
-                    occurred_at,
-                    "tool",
-                    name,
-                    &format!("{line_id}:tool:{name}"),
-                )?;
+                if persist {
+                    append_metric(
+                        store,
+                        &session_id,
+                        occurred_at,
+                        "tool",
+                        name,
+                        &format!("{line_id}:tool:{name}"),
+                    )?;
+                }
             }
             if let Some(input) = payload
                 .get("input")
@@ -250,14 +285,16 @@ fn ingest_session<S: UsageStore>(
                     count_tool_languages(input, &mut languages);
                 }
                 for language in languages.keys() {
-                    append_metric(
-                        store,
-                        &session_id,
-                        occurred_at,
-                        "language_v2",
-                        language,
-                        &format!("{line_id}:language-v2:{language}"),
-                    )?;
+                    if persist {
+                        append_metric(
+                            store,
+                            &session_id,
+                            occurred_at,
+                            "language_v2",
+                            language,
+                            &format!("{line_id}:language-v2:{language}"),
+                        )?;
+                    }
                 }
             }
             continue;
@@ -279,7 +316,7 @@ fn ingest_session<S: UsageStore>(
                 raw_event_id: stable_id(&format!("raw:prompt:{line_id}")),
                 ..Default::default()
             };
-            if append_event(store, &root, &usage)? {
+            if persist && append_event(store, &root, &usage)? {
                 stats.events_inserted += 1;
             }
             continue;
@@ -287,7 +324,9 @@ fn ingest_session<S: UsageStore>(
         if kind == "event_msg" && payload.get("type").and_then(Value::as_str) == Some("token_count")
         {
             let current = counters(payload.get("info"));
-            stats.token_records += 1;
+            if persist {
+                stats.token_records += 1;
+            }
             if current == Counters::default() {
                 continue;
             }
@@ -320,7 +359,7 @@ fn ingest_session<S: UsageStore>(
                 raw_event_id: stable_id(&format!("raw:token:{line_id}")),
                 ..Default::default()
             };
-            if append_event(store, &root, &usage)? {
+            if persist && append_event(store, &root, &usage)? {
                 stats.events_inserted += 1;
             }
             continue;
@@ -331,7 +370,7 @@ fn ingest_session<S: UsageStore>(
             && let Some(input) = payload.get("input").and_then(Value::as_str)
         {
             let (added, removed) = patch_counts(input);
-            if added == 0 && removed == 0 {
+            if !persist || (added == 0 && removed == 0) {
                 continue;
             }
             let event_id = stable_id(&format!("patch:{line_id}"));
@@ -355,7 +394,7 @@ fn ingest_session<S: UsageStore>(
             }
         }
     }
-    Ok(())
+    Ok(last_complete_offset)
 }
 
 fn append_event<S: UsageStore>(store: &mut S, payload: &Value, event: &UsageEvent) -> Result<bool> {
@@ -721,6 +760,8 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    use crate::storage::{UsageStore, sqlite::SqliteStore};
+
     #[test]
     fn aggregates_breakdowns_and_cache_rate() {
         let dir = tempfile::tempdir().unwrap();
@@ -733,5 +774,33 @@ mod tests {
         assert!(report.models.contains_key("gpt-5.5"));
         assert!(report.clients.contains_key("Desktop"));
         assert_eq!(cache_hit_rate(&report), Some(25.0));
+    }
+
+    #[test]
+    fn ingests_only_appended_lines_and_keeps_token_deltas() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        writeln!(file, r#"{{"timestamp":"2026-07-19T05:00:00Z","type":"session_meta","payload":{{"model":"gpt-5.5"}}}}"#).unwrap();
+        writeln!(file, r#"{{"timestamp":"2026-07-19T05:01:00Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}}}}}"#).unwrap();
+
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let first = ingest_into_store(Some(dir.path().to_str().unwrap()), &mut store).unwrap();
+        assert_eq!(first.token_records, 1);
+
+        writeln!(file, r#"{{"timestamp":"2026-07-19T05:02:00Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":20,"output_tokens":10,"total_tokens":30}}}}}}}}"#).unwrap();
+        file.flush().unwrap();
+
+        let second = ingest_into_store(Some(dir.path().to_str().unwrap()), &mut store).unwrap();
+        assert_eq!(second.token_records, 1);
+        let summary = store
+            .summary_for_agent(
+                Some("codex"),
+                "2026-07-19T00:00:00Z".parse().unwrap(),
+                "2026-07-20T00:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(summary.total_tokens, 30);
+        assert_eq!(summary.requests, 2);
     }
 }

@@ -144,7 +144,31 @@ impl SqliteStore {
                 _ => {}
             }
         }
+        self.attach_rate_limit(&mut summary, agent_name, from, to)?;
         Ok(summary)
+    }
+
+    fn attach_rate_limit(
+        &self,
+        summary: &mut UsageSummary,
+        agent_name: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<()> {
+        let latest: Option<(f64, i64, i64)> = self
+            .connection
+            .query_row(
+                "SELECT json_extract(payload, '$.payload.rate_limits.primary.used_percent'), json_extract(payload, '$.payload.rate_limits.primary.window_minutes'), json_extract(payload, '$.payload.rate_limits.primary.resets_at') FROM agentusage_usage_raw_events WHERE source_system=?1 AND occurred_at >= ?2 AND occurred_at < ?3 AND json_extract(payload, '$.payload.rate_limits.primary.used_percent') IS NOT NULL ORDER BY occurred_at DESC LIMIT 1",
+                params![agent_name, from.to_rfc3339(), to.to_rfc3339()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((used, window, resets)) = latest {
+            summary.primary_used_percent = Some(used);
+            summary.primary_window_minutes = Some(window);
+            summary.primary_resets_at = Some(resets);
+        }
+        Ok(())
     }
 
     fn init(&self) -> Result<()> {
@@ -158,11 +182,23 @@ impl SqliteStore {
             let _ = self.connection.execute(statement, []);
         }
         self.connection.execute("CREATE INDEX IF NOT EXISTS agentusage_usage_events_project ON agentusage_usage_events(project)", [])?;
+        self.connection.execute("CREATE INDEX IF NOT EXISTS agentusage_usage_raw_events_assistant_usage_id ON agentusage_usage_raw_events(json_extract(payload, '$.assistant_usage_event_id'))", [])?;
+        self.connection.execute("CREATE INDEX IF NOT EXISTS agentusage_usage_events_model_client_time ON agentusage_usage_events(model, client, occurred_at)", [])?;
         Ok(())
     }
 }
 
 impl UsageStore for SqliteStore {
+    fn begin_batch(&mut self) -> Result<()> {
+        self.connection.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(())
+    }
+
+    fn end_batch(&mut self) -> Result<()> {
+        self.connection.execute_batch("COMMIT")?;
+        Ok(())
+    }
+
     fn append_record(&mut self, record: &IngestRecord) -> Result<bool> {
         let inserted = self.connection.execute(
             "INSERT OR IGNORE INTO agentusage_ingest_records (record_id,source_path,line_number,occurred_at,provider_id,agent_name,session_id,event_type,payload_type,model,client,project,tool_name,payload,dedup_key) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
@@ -331,6 +367,9 @@ impl UsageStore for SqliteStore {
                 }
                 _ => {}
             }
+        }
+        if let Some(agent_name) = agent_name {
+            self.attach_rate_limit(&mut summary, agent_name, from, to)?;
         }
         summary.sessions = self.connection.query_row("SELECT COUNT(DISTINCT session_id) FROM agentusage_usage_events WHERE occurred_at >= ?1 AND occurred_at < ?2 AND (?3 IS NULL OR agent_name = ?3)", params![from.to_rfc3339(), to.to_rfc3339(), agent_name], |row| row.get(0))?;
         Ok(summary)
