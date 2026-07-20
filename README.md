@@ -36,6 +36,17 @@ you explicitly configure a PostgreSQL server.
 
 ## Installation
 
+If Rust is installed, the simplest option is:
+
+```bash
+cargo install --git https://github.com/binzhango/agentusage --locked --bins
+agentusage --version
+```
+
+This installs both `agentusage` and the `au` alias into Cargo's binary
+directory, usually `~/.cargo/bin`. For a local checkout, use
+`cargo install --path . --locked --bins`.
+
 Download the archive for your platform from the
 [latest GitHub release](https://github.com/binzhango/agentusage/releases/latest),
 extract it, and put the `agentusage` binary on your `PATH`.

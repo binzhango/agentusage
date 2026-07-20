@@ -9,6 +9,10 @@ repository = "https://github.com/binzhango/agentusage"
 readme = "README.md"
 
 [[bin]]
+name = "agentusage"
+path = "src/main.rs"
+
+[[bin]]
 name = "au"
 path = "src/main.rs"
 
