@@ -6,6 +6,12 @@ The release workflow updates this file automatically when `main` is released.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-20
+
+- Merge pull request #8 from binzhango/feature_agentusage_tui (79d0396)
+- Fix incremental ingestion and usage reporting (d5c1bd5)
+
+
 ## [0.1.6] - 2026-07-20
 
 - Merge pull request #7 from binzhango/feature_agentusage_tui (a185293)
