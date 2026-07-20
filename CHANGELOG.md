@@ -6,6 +6,15 @@ The release workflow updates this file automatically when `main` is released.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-20
+
+- Merge pull request #7 from binzhango/feature_agentusage_tui (a185293)
+- Clean up transient release notes (4ae6b09)
+- chore(release): v0.1.5 [skip ci] (82d4056)
+- Merge pull request #6 from binzhango/feature_agentusage_tui (891a2d3)
+- Use commit changelog for releases (461d3d9)
+
+
 ## [0.1.5] - 2026-07-20
 
 - Merge pull request #6 from binzhango/feature_agentusage_tui (891a2d3)
