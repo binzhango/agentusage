@@ -108,6 +108,9 @@ jobs:
           name: release-notes
           path: RELEASE_NOTES.md
 
+      - name: Remove transient release notes
+        run: rm RELEASE_NOTES.md
+
       - name: Commit version and tag
         shell: bash
         env:
