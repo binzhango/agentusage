@@ -6,6 +6,15 @@ The release workflow updates this file automatically when `main` is released.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-20
+
+- Merge pull request #4 from binzhango/feature_agentusage_tui (96c2d36)
+- Fix Windows browser launcher warning (690dc3b)
+- Add roadmap checklist (05e0e81)
+- Add au executable alias (184ab40)
+- Unify dashboard server and CLI interfaces (b5d4aec)
+
+
 ## [0.1.2] - 2026-07-19
 
 - Merge pull request #3 from binzhango/feature_init (174900e)
