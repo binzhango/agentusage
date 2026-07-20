@@ -88,6 +88,11 @@ jobs:
               f"## [{os.environ['VERSION']}] - "
               f"{datetime.date.today().isoformat()}\n\n{entries}\n"
           )
+          release_notes = (
+              f"# agentusage {os.environ['VERSION']}\n\n"
+              f"## Changes\n\n{entries}\n"
+          )
+          pathlib.Path("RELEASE_NOTES.md").write_text(release_notes)
           marker = "## [Unreleased]"
           if marker in text:
               insert_at = text.index(marker) + len(marker)
@@ -96,6 +101,12 @@ jobs:
               text = text.rstrip() + "\n\n" + section
           path.write_text(text)
           PY
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md
 
       - name: Commit version and tag
         shell: bash
@@ -221,7 +232,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.version.outputs.version }}
-          generate_release_notes: true
+          body_path: dist/RELEASE_NOTES.md
           files: |
             dist/*.tar.gz
             dist/*.zip
