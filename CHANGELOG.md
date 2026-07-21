@@ -6,6 +6,16 @@ The release workflow updates this file automatically when `main` is released.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-21
+
+- Merge pull request #11 from binzhango/feature_choose-interactive-metrics-framework (eaff361)
+- Merge branch 'main' into feature_choose-interactive-metrics-framework (a4f4fa5)
+- Start stable release line at v1.0.0 (826dc3b)
+- Ship stable usage dashboard experience (7dba4ac)
+- Add spending window comparison (cb4a42b)
+- Update release actions for Node 24 (35e9764)
+
+
 ## [0.1.9] - 2026-07-21
 
 - Merge pull request #10 from binzhango/feature_dashboard_table (fb2d2f7)
