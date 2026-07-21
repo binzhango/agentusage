@@ -48,6 +48,17 @@ impl Window {
             Self::All => "All Time",
         }
     }
+    fn index(self) -> usize {
+        match self {
+            Self::Today => 0,
+            Self::SevenDays => 1,
+            Self::ThirtyDays => 2,
+            Self::All => 3,
+        }
+    }
+    fn all() -> [Self; 4] {
+        [Self::Today, Self::SevenDays, Self::ThirtyDays, Self::All]
+    }
     fn dates(self) -> (NaiveDate, NaiveDate) {
         let end = Local::now().date_naive();
         let start = match self {
@@ -75,6 +86,7 @@ struct ProviderData {
     cache_read_tokens: i64,
     cache_write_tokens: i64,
     cost_usd: f64,
+    spending_by_window: [f64; 4],
     ai_credits: f64,
     lines_added: i64,
     lines_removed: i64,
@@ -457,10 +469,36 @@ impl Dashboard {
         )));
         lines.push(Line::from(""));
         lines.push(section_line("💰 Spending", Color::Green, inner_width));
-        lines.push(Line::from(format!(
-            "All-Time Cost  ${:.6}    AI credits {:.4}",
-            provider.cost_usd, provider.ai_credits
-        )));
+        let spending_widths = [14, 18];
+        lines.push(table_border(&spending_widths, '┌', '┬', '┐'));
+        lines.push(table_header_row(
+            &["window", "cost"].map(str::to_owned),
+            &spending_widths,
+            &[false, true],
+        ));
+        lines.push(table_border(&spending_widths, '├', '┼', '┤'));
+        for window in Window::all() {
+            let style = if window == self.snapshot.window {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(
+                table_row(
+                    &[
+                        window.label().to_owned(),
+                        format!("${:.6}", provider.spending_by_window[window.index()]),
+                    ],
+                    &spending_widths,
+                    &[false, true],
+                )
+                .style(style),
+            );
+        }
+        lines.push(table_border(&spending_widths, '└', '┴', '┘'));
+        lines.push(Line::from(format!("AI credits {:.4}", provider.ai_credits)));
         lines.push(Line::from(""));
         lines.push(section_line(
             "Model Burn",
@@ -478,9 +516,23 @@ impl Dashboard {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            let widths = [3, 28, 9, 16, 12];
+            let longest_model = provider
+                .models
+                .iter()
+                .take(8)
+                .map(|(model, _, _)| model.chars().count())
+                .max()
+                .unwrap_or(28);
+            // The other model columns consume 56 terminal cells including
+            // borders and padding. Use the remaining space for model names so
+            // long names remain visible whenever the terminal can accommodate
+            // them.
+            let model_width = longest_model
+                .min(inner_width.saturating_sub(56) as usize)
+                .max(20);
+            let widths = [3, model_width, 9, 16, 12];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["#", "model", "share", "tokens", "cost"].map(str::to_owned),
                 &widths,
                 &[true, false, true, true, true],
@@ -495,7 +547,7 @@ impl Dashboard {
                 lines.push(table_row(
                     &[
                         (rank + 1).to_string(),
-                        truncate(model, 28),
+                        truncate(model, model_width),
                         format!("{share:.1}%"),
                         format!("{} tok", compact(*tokens)),
                         format!("${cost:.5}"),
@@ -508,7 +560,7 @@ impl Dashboard {
             lines.push(Line::from("Token Breakdown"));
             let token_widths = [14, 14, 16, 14, 14];
             lines.push(table_border(&token_widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["input", "output", "cache read", "reasoning", "total"].map(str::to_owned),
                 &token_widths,
                 &[false, false, false, false, false],
@@ -541,7 +593,7 @@ impl Dashboard {
         } else {
             let widths = [3, 32, 16, 12];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["#", "client", "tokens", "cost"].map(str::to_owned),
                 &widths,
                 &[true, false, true, true],
@@ -575,7 +627,7 @@ impl Dashboard {
         } else {
             let widths = [3, 32, 16, 12];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["#", "project", "tokens", "cost"].map(str::to_owned),
                 &widths,
                 &[true, false, true, true],
@@ -605,7 +657,7 @@ impl Dashboard {
         } else {
             let widths = [3, 32, 14];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["#", "tool", "calls"].map(str::to_owned),
                 &widths,
                 &[true, false, true],
@@ -639,7 +691,7 @@ impl Dashboard {
             let total: usize = provider.languages.iter().map(|(_, count)| *count).sum();
             let widths = [22, 9, 12];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["language", "share", "requests"].map(str::to_owned),
                 &widths,
                 &[false, true, true],
@@ -1076,6 +1128,7 @@ fn load_provider(
     }
     match crate::report_for_period(name, start, end, backend) {
         Ok(report) => {
+            let spending_by_window = load_spending_windows(name, backend);
             let rate_limit = if ingest {
                 let cached = load_cached_provider(name, start, end, backend);
                 (cached.primary_used_percent, cached.primary_window_minutes)
@@ -1117,6 +1170,7 @@ fn load_provider(
                 cache_read_tokens: report.cached_input_tokens,
                 cache_write_tokens: report.cache_write_tokens,
                 cost_usd: report.cost_usd,
+                spending_by_window,
                 ai_credits: report.ai_credits,
                 lines_added: report.lines_added,
                 lines_removed: report.lines_removed,
@@ -1158,6 +1212,7 @@ fn load_cached_provider(
         });
     match result {
         Ok(summary) => {
+            let spending_by_window = load_spending_windows(name, backend);
             let mut models: Vec<_> = summary
                 .models
                 .into_iter()
@@ -1201,6 +1256,7 @@ fn load_cached_provider(
                 cache_read_tokens: summary.cache_read_tokens,
                 cache_write_tokens: summary.cache_write_tokens,
                 cost_usd: summary.cost_usd,
+                spending_by_window,
                 ai_credits: summary.ai_credits,
                 lines_added: summary.lines_added,
                 lines_removed: summary.lines_removed,
@@ -1222,6 +1278,22 @@ fn load_cached_provider(
             ..Default::default()
         },
     }
+}
+
+fn load_spending_windows(name: &str, backend: crate::storage::BackendMode) -> [f64; 4] {
+    let Ok(mut store) = crate::storage::Backend::open_read_only_for_agent(backend, name) else {
+        return [0.0; 4];
+    };
+    let agent = crate::agent_name_for_report(name);
+    Window::all().map(|window| {
+        let (start, end) = window.dates();
+        let from = crate::local_midnight_utc(start);
+        let to = crate::local_midnight_utc(end + ChronoDuration::days(1));
+        store
+            .quick_summary_for_agent(agent, from, to)
+            .map(|summary| summary.cost_usd)
+            .unwrap_or_default()
+    })
 }
 
 fn compact(value: i64) -> String {
@@ -1301,6 +1373,14 @@ fn table_row(cells: &[String], widths: &[usize], right_aligned: &[bool]) -> Line
         value.push_str(" │");
     }
     Line::from(value)
+}
+
+fn table_header_row(cells: &[String], widths: &[usize], right_aligned: &[bool]) -> Line<'static> {
+    table_row(cells, widths, right_aligned).style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 fn aligned_header(left: &str, right: &str, width: u16) -> String {
