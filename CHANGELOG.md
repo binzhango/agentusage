@@ -6,6 +6,14 @@ The release workflow updates this file automatically when `main` is released.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-07-21
+
+- Merge pull request #9 from binzhango/feature_dashboard_table (3522d75)
+- Fix redundant timestamp closure (44e3700)
+- Improve dashboard tables and provider startup (d88348c)
+- Add database-backed sync and architecture docs (6a8171a)
+
+
 ## [0.1.7] - 2026-07-20
 
 - Merge pull request #8 from binzhango/feature_agentusage_tui (79d0396)
