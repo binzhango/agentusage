@@ -6,6 +6,12 @@ The release workflow updates this file automatically when `main` is released.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-07-21
+
+- Merge pull request #10 from binzhango/feature_dashboard_table (fb2d2f7)
+- Simplify report command usage (e6252e0)
+
+
 ## [0.1.8] - 2026-07-21
 
 - Merge pull request #9 from binzhango/feature_dashboard_table (3522d75)
