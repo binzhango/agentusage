@@ -483,9 +483,7 @@ fn event_timestamp(root: &Value) -> Option<DateTime<Utc>> {
             .ok()
             .map(|value| value.with_timezone(&Utc));
     }
-    value
-        .as_i64()
-        .and_then(|millis| DateTime::from_timestamp_millis(millis))
+    value.as_i64().and_then(DateTime::from_timestamp_millis)
 }
 
 fn counters(value: &Value) -> Counters {
