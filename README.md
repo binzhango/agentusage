@@ -19,8 +19,7 @@ you explicitly configure a PostgreSQL server.
 - [ ] Add Google Antigravity CLI usage support.
 - [ ] Expand the local web server into a fully interactive dashboard with richer
   filtering, provider detail views, and responsive usage exploration.
-- [ ] Add a `config.toml` onboarding flow for discovering and configuring multiple
-  agent sources in one place.
+- [x] Add `config.toml` controls for automatic provider-file synchronization.
 
 ## Highlights
 
@@ -33,6 +32,63 @@ you explicitly configure a PostgreSQL server.
 - Copilot CLI and VS Code Copilot model, token, and AI-credit tracking.
 - Telemetry hooks with stdin, positional payload, spool-only, and daemon modes.
 - macOS, Linux, and Windows release binaries.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Sources[Provider sources]
+        CodexFiles[Codex rollout JSONL]
+        ClaudeFiles[Claude Code JSONL]
+        OpenCodeFiles[OpenCode JSONL]
+        CopilotFiles[Copilot DB / JSONL / logs]
+        Hook[Provider hook event]
+    end
+
+    subgraph Ingestion[Ingestion and normalization]
+        Sync[Incremental sync<br/>cursors + deduplication]
+        Adapters[Provider adapters<br/>Codex / Claude / OpenCode / Copilot]
+        Telemetry[Telemetry hook parser]
+        Normalize[Flexible event normalization<br/>raw payload preserved]
+    end
+
+    subgraph Storage[Canonical storage]
+        SQLite[(SQLite)]
+        Postgres[(PostgreSQL)]
+        Tables[(Raw events<br/>Usage events<br/>Metrics<br/>Ingest records<br/>Cursors)]
+    end
+
+    subgraph Consumers[Database-backed consumers]
+        Commands[CLI reports]
+        TUI[Terminal dashboard]
+        Server[HTTP dashboard / API]
+    end
+
+    Config[config.toml<br/>auto_sync + refresh_seconds]
+
+    CodexFiles --> Sync
+    ClaudeFiles --> Sync
+    OpenCodeFiles --> Sync
+    CopilotFiles --> Sync
+    Hook --> Telemetry
+    Telemetry --> Normalize
+    Sync --> Adapters --> Normalize
+    Normalize --> SQLite
+    Normalize --> Postgres
+    SQLite --> Tables
+    Postgres --> Tables
+    Tables --> Commands
+    Tables --> TUI
+    Tables --> Server
+    Config -. controls refresh .-> Sync
+    Config -. controls background sync .-> TUI
+    Config -. controls background sync .-> Server
+```
+
+Provider files are read only by synchronization. Commands, the terminal dashboard,
+and the server query SQLite/PostgreSQL tables; quota is calculated from the
+latest persisted raw provider event, while usage and credits are aggregated
+from normalized usage events.
 
 ## Installation
 
@@ -102,8 +158,9 @@ and JSON API without exposing usage data to the network. Use `--host` and
 `--port` to change the bind address when needed.
 
 On first use, the CLI checks for an initialized database. If none exists, it
-asks whether to initialize SQLite, use PostgreSQL, or continue with the JSONL
-fallback. Non-interactive invocations do not silently initialize a database.
+asks whether to initialize SQLite or use PostgreSQL. Reports never read
+provider files directly. Run `agentusage sync <provider>` to synchronize provider
+data into the selected database when needed.
 
 ## Reports
 
@@ -148,18 +205,23 @@ Reports include:
 - tool-call and language breakdowns for imported provider telemetry;
 - Copilot AI credits and native AI-unit values when the source provides them.
 
-Codex can read an alternate rollout-log directory:
+Provider files can be imported from an alternate source directory during an
+explicit synchronization:
 
 ```bash
-agentusage daily --provider codex --sessions-dir /path/to/codex/sessions
+agentusage sync codex --sessions-dir /path/to/codex/sessions
 ```
+
+The provider is a positional argument for readability. The compatibility forms
+`agentusage sync --provider codex` and `agentusage ingest --provider codex` are
+also supported.
 
 ## Supported providers
 
 | Provider | Local source | Report details |
 | --- | --- | --- |
 | `codex` | Codex rollout JSONL | Tokens, models, cache, cost, sessions, and code changes |
-| `claude_code` | Claude Code session JSONL | Tokens, models, sessions, and desktop quota signals |
+| `claude_code` | Claude Code session JSONL | Tokens, models, and sessions |
 | `opencode` | OpenCode session JSONL | Tokens, models, sessions, and cost fields |
 | `copilot` | Copilot CLI databases and VS Code chat JSONL/logs | CLI/IDE attribution, tokens, models, and AI credits |
 
@@ -169,7 +231,9 @@ metadata is present locally.
 
 ## Storage and configuration
 
-Provider reports use separate SQLite databases by default:
+Provider reports use separate SQLite databases by default. Commands, the
+dashboard, and the server read metrics and status only from these tables; local
+provider files are read only by ingestion:
 
 ```text
 ~/.local/state/agentusage/codex.db
@@ -189,6 +253,22 @@ Set `XDG_STATE_HOME` to change the state directory:
 ```bash
 XDG_STATE_HOME="$HOME/.local/state" agentusage daily --provider codex
 ```
+
+## Automatic synchronization
+
+Automatic sync is configured in `~/.config/agentusage/config.toml` (or the path
+set by `AGENTUSAGE_CONFIG`):
+
+```toml
+[sync]
+auto_sync = true
+refresh_seconds = 300
+```
+
+The dashboard and server ingest provider files at this interval. Report
+commands perform one incremental sync before querying the database, and the
+provider hook performs the same sync after an agent event. Set
+`refresh_seconds` to the interval you prefer.
 
 PostgreSQL is available through `AGENTUSAGE_POSTGRES_URL`. When no initialized
 provider SQLite database exists, the first-run prompt can select PostgreSQL:
@@ -224,6 +304,11 @@ options include:
 - `--db-path` to use a custom telemetry database;
 - `--spool-only` to write to the local spool without immediate ingestion;
 - `--verbose` to print the event and deduplication result.
+
+When a hook is configured for a provider, the non-spool hook path also runs an
+incremental provider-file sync into that provider's database. Reports perform
+the same sync before querying, so the database remains the only read path for
+metrics and status.
 
 Start the daemon with the default or a custom database:
 

@@ -144,35 +144,35 @@ impl SqliteStore {
                 _ => {}
             }
         }
-        self.attach_rate_limit(&mut summary, agent_name, from, to)?;
+        self.attach_rate_limit(&mut summary, agent_name)?;
         Ok(summary)
     }
 
-    fn attach_rate_limit(
-        &self,
-        summary: &mut UsageSummary,
-        agent_name: &str,
-        from: DateTime<Utc>,
-        to: DateTime<Utc>,
-    ) -> Result<()> {
-        let latest: Option<(f64, i64, i64)> = self
+    fn attach_rate_limit(&self, summary: &mut UsageSummary, agent_name: &str) -> Result<()> {
+        let latest: Option<String> = self
             .connection
             .query_row(
-                "SELECT json_extract(payload, '$.payload.rate_limits.primary.used_percent'), json_extract(payload, '$.payload.rate_limits.primary.window_minutes'), json_extract(payload, '$.payload.rate_limits.primary.resets_at') FROM agentusage_usage_raw_events WHERE source_system=?1 AND occurred_at >= ?2 AND occurred_at < ?3 AND json_extract(payload, '$.payload.rate_limits.primary.used_percent') IS NOT NULL ORDER BY occurred_at DESC LIMIT 1",
-                params![agent_name, from.to_rfc3339(), to.to_rfc3339()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                "SELECT payload FROM agentusage_usage_raw_events WHERE source_system=?1 ORDER BY occurred_at DESC LIMIT 1",
+                params![agent_name],
+                |row| row.get(0),
             )
             .optional()?;
-        if let Some((used, window, resets)) = latest {
+        if let Some(payload) = latest
+            .and_then(|payload| serde_json::from_str(&payload).ok())
+            .and_then(|payload| super::quota_from_payload(&payload))
+        {
+            let (used, window, resets) = payload;
             summary.primary_used_percent = Some(used);
-            summary.primary_window_minutes = Some(window);
-            summary.primary_resets_at = Some(resets);
+            summary.primary_window_minutes = window;
+            summary.primary_resets_at = resets;
         }
         Ok(())
     }
 
     fn init(&self) -> Result<()> {
-        self.connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS agentusage_ingest_records (record_id TEXT PRIMARY KEY, source_path TEXT NOT NULL, line_number INTEGER NOT NULL, occurred_at TEXT, provider_id TEXT NOT NULL, agent_name TEXT NOT NULL, session_id TEXT, event_type TEXT NOT NULL, payload_type TEXT, model TEXT, client TEXT, project TEXT, tool_name TEXT, payload TEXT NOT NULL, dedup_key TEXT NOT NULL UNIQUE); CREATE TABLE IF NOT EXISTS agentusage_usage_raw_events (event_id TEXT PRIMARY KEY, source_system TEXT NOT NULL, source_channel TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS agentusage_usage_events (event_id TEXT PRIMARY KEY, occurred_at TEXT NOT NULL, provider_id TEXT NOT NULL, agent_name TEXT NOT NULL, account_id TEXT, session_id TEXT, model TEXT, client TEXT, project TEXT, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, cache_write_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL, cost_usd REAL NOT NULL, ai_units_nano INTEGER NOT NULL DEFAULT 0, request_multiplier REAL NOT NULL DEFAULT 0, ai_credits REAL NOT NULL DEFAULT 0, requests INTEGER NOT NULL, prompts INTEGER NOT NULL, lines_added INTEGER NOT NULL, lines_removed INTEGER NOT NULL, dedup_key TEXT NOT NULL UNIQUE, raw_event_id TEXT NOT NULL REFERENCES agentusage_usage_raw_events(event_id)); CREATE TABLE IF NOT EXISTS agentusage_usage_metrics (metric_id TEXT PRIMARY KEY, occurred_at TEXT NOT NULL, provider_id TEXT NOT NULL, agent_name TEXT NOT NULL, session_id TEXT, dimension TEXT NOT NULL, name TEXT NOT NULL, dedup_key TEXT NOT NULL UNIQUE); CREATE INDEX IF NOT EXISTS agentusage_ingest_records_lookup ON agentusage_ingest_records(occurred_at,agent_name,event_type); CREATE INDEX IF NOT EXISTS agentusage_usage_events_occurred_at ON agentusage_usage_events(occurred_at); CREATE INDEX IF NOT EXISTS agentusage_usage_metrics_lookup ON agentusage_usage_metrics(occurred_at,agent_name,dimension); CREATE TABLE IF NOT EXISTS agentusage_ingest_cursors (path TEXT PRIMARY KEY, byte_offset INTEGER NOT NULL, file_size INTEGER NOT NULL, last_event_hash TEXT, updated_at TEXT NOT NULL);")?;
+        self.connection
+            .execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")?;
+        self.connection.execute_batch(super::schema::SQLITE)?;
         for statement in [
             "ALTER TABLE agentusage_usage_events ADD COLUMN project TEXT",
             "ALTER TABLE agentusage_usage_events ADD COLUMN ai_units_nano INTEGER NOT NULL DEFAULT 0",
@@ -181,9 +181,10 @@ impl SqliteStore {
         ] {
             let _ = self.connection.execute(statement, []);
         }
-        self.connection.execute("CREATE INDEX IF NOT EXISTS agentusage_usage_events_project ON agentusage_usage_events(project)", [])?;
-        self.connection.execute("CREATE INDEX IF NOT EXISTS agentusage_usage_raw_events_assistant_usage_id ON agentusage_usage_raw_events(json_extract(payload, '$.assistant_usage_event_id'))", [])?;
-        self.connection.execute("CREATE INDEX IF NOT EXISTS agentusage_usage_events_model_client_time ON agentusage_usage_events(model, client, occurred_at)", [])?;
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS agentusage_usage_events_project ON agentusage_usage_events(project)",
+            [],
+        )?;
         Ok(())
     }
 }
@@ -369,7 +370,7 @@ impl UsageStore for SqliteStore {
             }
         }
         if let Some(agent_name) = agent_name {
-            self.attach_rate_limit(&mut summary, agent_name, from, to)?;
+            self.attach_rate_limit(&mut summary, agent_name)?;
         }
         summary.sessions = self.connection.query_row("SELECT COUNT(DISTINCT session_id) FROM agentusage_usage_events WHERE occurred_at >= ?1 AND occurred_at < ?2 AND (?3 IS NULL OR agent_name = ?3)", params![from.to_rfc3339(), to.to_rfc3339(), agent_name], |row| row.get(0))?;
         Ok(summary)

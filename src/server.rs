@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{Duration, Local, NaiveDate};
 use serde::Serialize;
-use std::process::Command;
+use std::{process::Command, thread};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const PROVIDERS: [&str; 4] = ["codex", "claude_code", "opencode", "copilot"];
@@ -17,7 +17,7 @@ pub fn run(host: &str, port: u16, open: bool) -> Result<()> {
     let server = Server::http(&address).map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let url = format!("http://{address}");
     println!("agentusage server listening at {url}");
-    start_background_ingestion();
+    start_background_ingestion(crate::config::load()?);
     if open {
         open_browser(&url);
     }
@@ -29,39 +29,24 @@ pub fn run(host: &str, port: u16, open: bool) -> Result<()> {
     Ok(())
 }
 
-fn start_background_ingestion() {
+fn start_background_ingestion(config: crate::config::AppConfig) {
+    if !config.auto_sync {
+        return;
+    }
+    let interval = config.refresh_interval;
     for provider in PROVIDERS {
         std::thread::spawn(move || {
-            let result = (|| -> Result<()> {
-                let mode = crate::storage::prepare_backend_for_agent(false, provider)?;
-                let mut store = crate::storage::Backend::open_for_agent(mode, provider)?;
-                match provider {
-                    "codex" => {
-                        crate::providers::codex::ingest_into_store(None, &mut store)?;
-                    }
-                    "claude_code" => {
-                        crate::providers::local::ingest_into_store(
-                            crate::providers::local::Agent::ClaudeCode,
-                            None,
-                            &mut store,
-                        )?;
-                    }
-                    "opencode" => {
-                        crate::providers::local::ingest_into_store(
-                            crate::providers::local::Agent::OpenCode,
-                            None,
-                            &mut store,
-                        )?;
-                    }
-                    "copilot" => {
-                        crate::providers::copilot::ingest_into_store(None, &mut store)?;
-                    }
-                    _ => {}
+            loop {
+                let result = (|| -> Result<()> {
+                    let mode = crate::storage::prepare_backend_for_agent(false, provider)?;
+                    let mut store = crate::storage::Backend::open_for_agent(mode, provider)?;
+                    let _ = crate::ingest_provider(provider, None, &mut store)?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    eprintln!("agentusage server background ingestion ({provider}): {error:#}");
                 }
-                Ok(())
-            })();
-            if let Err(error) = result {
-                eprintln!("agentusage server background ingestion ({provider}): {error:#}");
+                thread::sleep(interval);
             }
         });
     }

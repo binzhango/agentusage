@@ -10,7 +10,7 @@ mod tui;
 
 use anyhow::{Context, Result};
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Utc};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::io::{self, Read};
 
 #[derive(Debug, Parser)]
@@ -49,32 +49,24 @@ enum Command {
         provider: String,
         #[arg(long)]
         date: Option<String>,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
     Weekly {
         #[arg(long, default_value = "codex")]
         provider: String,
         #[arg(long)]
         date: Option<String>,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
     Monthly {
         #[arg(long, default_value = "codex")]
         provider: String,
         #[arg(long)]
         month: Option<String>,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
     Yearly {
         #[arg(long, default_value = "codex")]
         provider: String,
         #[arg(long)]
         year: Option<i32>,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
     Range {
         #[arg(long, default_value = "codex")]
@@ -83,15 +75,26 @@ enum Command {
         from: String,
         #[arg(long)]
         to: String,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
-    Ingest {
-        #[arg(long, default_value = "codex")]
-        provider: String,
-        #[arg(long)]
-        sessions_dir: Option<String>,
-    },
+    #[command(visible_alias = "ingest")]
+    Sync(SyncArgs),
+}
+
+#[derive(Debug, Args)]
+struct SyncArgs {
+    /// Provider to synchronize: codex, claude_code, opencode, or copilot.
+    #[arg(value_name = "PROVIDER")]
+    provider: Option<String>,
+    /// Compatibility form of the provider argument.
+    #[arg(
+        long = "provider",
+        value_name = "PROVIDER",
+        conflicts_with = "provider"
+    )]
+    provider_flag: Option<String>,
+    /// Alternate source directory for providers that read session files.
+    #[arg(long)]
+    sessions_dir: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -101,32 +104,24 @@ enum ReportCommand {
         provider: String,
         #[arg(long)]
         date: Option<String>,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
     Weekly {
         #[arg(long, default_value = "codex")]
         provider: String,
         #[arg(long)]
         date: Option<String>,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
     Monthly {
         #[arg(long, default_value = "codex")]
         provider: String,
         #[arg(long)]
         month: Option<String>,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
     Yearly {
         #[arg(long, default_value = "codex")]
         provider: String,
         #[arg(long)]
         year: Option<i32>,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
     Range {
         #[arg(long, default_value = "codex")]
@@ -135,8 +130,6 @@ enum ReportCommand {
         from: String,
         #[arg(long)]
         to: String,
-        #[arg(long)]
-        sessions_dir: Option<String>,
     },
 }
 
@@ -191,24 +184,15 @@ fn main() -> Result<()> {
                 Ok(())
             }
         },
-        Some(Command::Daily {
-            provider,
-            date,
-            sessions_dir,
-        }) => {
+        Some(Command::Daily { provider, date }) => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let target = parse_date_or_today(date.as_deref())?;
-            let report =
-                report_for_period(&provider, target, target, sessions_dir.as_deref(), backend)?;
+            let report = report_for_period(&provider, target, target, backend)?;
             print_report(&report);
             Ok(())
         }
-        Some(Command::Weekly {
-            provider,
-            date,
-            sessions_dir,
-        }) => {
+        Some(Command::Weekly { provider, date }) => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let anchor = parse_date_or_today(date.as_deref())?;
@@ -218,16 +202,11 @@ fn main() -> Result<()> {
                 &provider,
                 start,
                 start + chrono::Duration::days(6),
-                sessions_dir.as_deref(),
                 backend,
             )?);
             Ok(())
         }
-        Some(Command::Monthly {
-            provider,
-            month,
-            sessions_dir,
-        }) => {
+        Some(Command::Monthly { provider, month }) => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let value = month.unwrap_or_else(|| Local::now().format("%Y-%m").to_string());
@@ -242,16 +221,11 @@ fn main() -> Result<()> {
                 &provider,
                 start,
                 next - chrono::Duration::days(1),
-                sessions_dir.as_deref(),
                 backend,
             )?);
             Ok(())
         }
-        Some(Command::Yearly {
-            provider,
-            year,
-            sessions_dir,
-        }) => {
+        Some(Command::Yearly { provider, year }) => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let year = year.unwrap_or_else(|| Local::now().year());
@@ -260,36 +234,27 @@ fn main() -> Result<()> {
                 &provider,
                 start,
                 NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-                sessions_dir.as_deref(),
                 backend,
             )?);
             Ok(())
         }
-        Some(Command::Range {
-            provider,
-            from,
-            to,
-            sessions_dir,
-        }) => {
+        Some(Command::Range { provider, from, to }) => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let start = NaiveDate::parse_from_str(&from, "%Y-%m-%d")
                 .with_context(|| format!("invalid --from {from:?}"))?;
             let end = NaiveDate::parse_from_str(&to, "%Y-%m-%d")
                 .with_context(|| format!("invalid --to {to:?}"))?;
-            print_report(&report_for_period(
-                &provider,
-                start,
-                end,
-                sessions_dir.as_deref(),
-                backend,
-            )?);
+            print_report(&report_for_period(&provider, start, end, backend)?);
             Ok(())
         }
-        Some(Command::Ingest {
-            provider,
-            sessions_dir,
-        }) => run_ingest(&provider, sessions_dir.as_deref()),
+        Some(Command::Sync(args)) => {
+            let provider = args
+                .provider_flag
+                .or(args.provider)
+                .unwrap_or_else(|| "codex".to_owned());
+            run_sync(&provider, args.sessions_dir.as_deref())
+        }
     }
 }
 
@@ -304,27 +269,13 @@ fn parse_date_or_today(value: Option<&str>) -> Result<NaiveDate> {
 
 fn run_report_command(command: ReportCommand) -> Result<()> {
     match command {
-        ReportCommand::Daily {
-            provider,
-            date,
-            sessions_dir,
-        } => {
+        ReportCommand::Daily { provider, date } => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let target = parse_date_or_today(date.as_deref())?;
-            print_report(&report_for_period(
-                &provider,
-                target,
-                target,
-                sessions_dir.as_deref(),
-                backend,
-            )?);
+            print_report(&report_for_period(&provider, target, target, backend)?);
         }
-        ReportCommand::Weekly {
-            provider,
-            date,
-            sessions_dir,
-        } => {
+        ReportCommand::Weekly { provider, date } => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let anchor = parse_date_or_today(date.as_deref())?;
@@ -334,15 +285,10 @@ fn run_report_command(command: ReportCommand) -> Result<()> {
                 &provider,
                 start,
                 start + chrono::Duration::days(6),
-                sessions_dir.as_deref(),
                 backend,
             )?);
         }
-        ReportCommand::Monthly {
-            provider,
-            month,
-            sessions_dir,
-        } => {
+        ReportCommand::Monthly { provider, month } => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let value = month.unwrap_or_else(|| Local::now().format("%Y-%m").to_string());
@@ -357,15 +303,10 @@ fn run_report_command(command: ReportCommand) -> Result<()> {
                 &provider,
                 start,
                 next - chrono::Duration::days(1),
-                sessions_dir.as_deref(),
                 backend,
             )?);
         }
-        ReportCommand::Yearly {
-            provider,
-            year,
-            sessions_dir,
-        } => {
+        ReportCommand::Yearly { provider, year } => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let year = year.unwrap_or_else(|| Local::now().year());
@@ -374,29 +315,17 @@ fn run_report_command(command: ReportCommand) -> Result<()> {
                 &provider,
                 start,
                 NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-                sessions_dir.as_deref(),
                 backend,
             )?);
         }
-        ReportCommand::Range {
-            provider,
-            from,
-            to,
-            sessions_dir,
-        } => {
+        ReportCommand::Range { provider, from, to } => {
             let backend = prepare_report_backend(&provider)?;
             validate_provider(&provider)?;
             let start = NaiveDate::parse_from_str(&from, "%Y-%m-%d")
                 .with_context(|| format!("invalid --from {from:?}"))?;
             let end = NaiveDate::parse_from_str(&to, "%Y-%m-%d")
                 .with_context(|| format!("invalid --to {to:?}"))?;
-            print_report(&report_for_period(
-                &provider,
-                start,
-                end,
-                sessions_dir.as_deref(),
-                backend,
-            )?);
+            print_report(&report_for_period(&provider, start, end, backend)?);
         }
     }
     Ok(())
@@ -407,16 +336,26 @@ fn prepare_report_backend(provider: &str) -> Result<storage::BackendMode> {
     Ok(backend)
 }
 
-fn run_ingest(provider: &str, sessions_dir: Option<&str>) -> Result<()> {
+fn run_sync(provider: &str, sessions_dir: Option<&str>) -> Result<()> {
     validate_provider(provider)?;
     let backend = prepare_report_backend(provider)?;
-    if backend == storage::BackendMode::Jsonl {
-        anyhow::bail!("{provider} ingestion requires SQLite or PostgreSQL storage");
-    }
     let mut store = storage::Backend::open_for_agent(backend, provider)?;
+    let (files_scanned, files_with_usage, token_records, malformed_lines) =
+        ingest_provider(provider, sessions_dir, &mut store)?;
+    eprintln!(
+        "[agentusage] synced provider={provider} files_scanned={files_scanned} files_with_usage={files_with_usage} token_records={token_records} malformed_lines={malformed_lines}"
+    );
+    Ok(())
+}
+
+fn ingest_provider(
+    provider: &str,
+    sessions_dir: Option<&str>,
+    store: &mut storage::Backend,
+) -> Result<(usize, usize, usize, usize)> {
     let (files_scanned, files_with_usage, token_records, malformed_lines) = match provider {
         "codex" => {
-            let stats = providers::codex::ingest_into_store(sessions_dir, &mut store)?;
+            let stats = providers::codex::ingest_into_store(sessions_dir, store)?;
             (
                 stats.files_scanned,
                 stats.files_with_usage,
@@ -427,15 +366,15 @@ fn run_ingest(provider: &str, sessions_dir: Option<&str>) -> Result<()> {
         "claude" | "claude_code" => providers::local::ingest_into_store(
             providers::local::Agent::ClaudeCode,
             sessions_dir,
-            &mut store,
+            store,
         )?,
         "opencode" | "open_code" => providers::local::ingest_into_store(
             providers::local::Agent::OpenCode,
             sessions_dir,
-            &mut store,
+            store,
         )?,
         "copilot" => {
-            let stats = providers::copilot::ingest_into_store(None, &mut store)?;
+            let stats = providers::copilot::ingest_into_store(None, store)?;
             (
                 stats.files_scanned,
                 stats.files_with_usage,
@@ -445,26 +384,22 @@ fn run_ingest(provider: &str, sessions_dir: Option<&str>) -> Result<()> {
         }
         _ => unreachable!(),
     };
-    eprintln!(
-        "[agentusage] ingested provider={provider} files_scanned={files_scanned} files_with_usage={files_with_usage} token_records={token_records} malformed_lines={malformed_lines}"
-    );
-    Ok(())
+    Ok((
+        files_scanned,
+        files_with_usage,
+        token_records,
+        malformed_lines,
+    ))
 }
 
 fn report_for_period(
     provider: &str,
     start: NaiveDate,
     end: NaiveDate,
-    sessions_dir: Option<&str>,
     backend: storage::BackendMode,
 ) -> Result<providers::codex::DailyUsage> {
-    if provider != "codex" && backend == storage::BackendMode::Jsonl {
-        anyhow::bail!("{provider} reports require SQLite or PostgreSQL storage");
-    }
-    if backend == storage::BackendMode::Jsonl {
-        return providers::codex::usage_between(start, end, sessions_dir);
-    }
-
+    let mut ingest_store = storage::Backend::open_for_agent(backend, provider)?;
+    let _ = ingest_provider(provider, None, &mut ingest_store)?;
     let mut store = storage::Backend::open_read_only_for_agent(backend, provider)?;
     let (files_scanned, files_with_usage, token_records, malformed_lines) = (0, 0, 0, 0);
     let from = local_midnight_utc(start);
@@ -578,9 +513,6 @@ fn report_for_period(
         files_with_usage,
         token_records,
         malformed_lines,
-        desktop_usage: (provider == "claude" || provider == "claude_code")
-            .then(providers::local::desktop_usage)
-            .flatten(),
     })
 }
 
@@ -653,19 +585,6 @@ fn print_report(report: &providers::codex::DailyUsage) {
         "ai credits           {:.6}\nai units (nano)      {}",
         report.ai_credits, report.ai_units_nano
     );
-    if let Some(desktop) = &report.desktop_usage {
-        println!(
-            "desktop samples      {}\ndesktop 5h signal     {}\ndesktop 7d signal     {}",
-            desktop.samples, desktop.five_hour_signal, desktop.seven_day_signal
-        );
-        eprintln!(
-            "[agentusage] claude_desktop samples={} latest_timestamp_ms={} five_hour_signal={} seven_day_signal={}",
-            desktop.samples,
-            desktop.latest_timestamp_ms,
-            desktop.five_hour_signal,
-            desktop.seven_day_signal
-        );
-    }
     println!("\nmodel breakdown:");
     for (name, usage) in &report.models {
         println!(
@@ -732,11 +651,26 @@ fn run_hook(
         store.ingest(request)?
     };
 
+    if !spool_only {
+        sync_provider_after_hook(&source)?;
+    }
+
     if verbose {
         println!(
             "telemetry hook {} status={} deduped={} event_id={}",
             source, result.status, result.deduped, result.event_id
         );
     }
+    Ok(())
+}
+
+fn sync_provider_after_hook(source: &str) -> Result<()> {
+    if !config::load()?.auto_sync {
+        return Ok(());
+    }
+    let provider = agent_name_for_report(source);
+    let backend = storage::prepare_backend_for_agent(false, provider)?;
+    let mut store = storage::Backend::open_for_agent(backend, provider)?;
+    let _ = ingest_provider(provider, None, &mut store)?;
     Ok(())
 }

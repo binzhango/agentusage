@@ -8,6 +8,7 @@ use std::{
 };
 
 pub mod postgres;
+pub mod schema;
 pub mod sqlite;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +121,49 @@ pub struct UsageSummary {
     pub primary_resets_at: Option<i64>,
 }
 
+/// Extract quota from one provider payload. The caller is responsible for
+/// selecting the latest raw event before calling this function.
+pub fn quota_from_payload(value: &serde_json::Value) -> Option<(f64, Option<i64>, Option<i64>)> {
+    fn walk(value: &serde_json::Value) -> Option<(f64, Option<i64>, Option<i64>)> {
+        if let serde_json::Value::Object(object) = value {
+            let number = |keys: &[&str]| {
+                keys.iter().find_map(|key| {
+                    object.get(*key).and_then(|value| {
+                        value
+                            .as_f64()
+                            .or_else(|| value.as_i64().map(|value| value as f64))
+                            .or_else(|| value.as_str()?.parse::<f64>().ok())
+                    })
+                })
+            };
+            if let Some(used) =
+                number(&["used_percent", "usedPercent", "percent_used", "percentUsed"])
+            {
+                return Some((
+                    used,
+                    number(&["window_minutes", "windowMinutes", "window"])
+                        .map(|value| value as i64),
+                    number(&["resets_at", "resetsAt", "reset_at", "resetAt"])
+                        .map(|value| value as i64),
+                ));
+            }
+            for child in object.values() {
+                if let Some(result) = walk(child) {
+                    return Some(result);
+                }
+            }
+        } else if let serde_json::Value::Array(values) = value {
+            for child in values {
+                if let Some(result) = walk(child) {
+                    return Some(result);
+                }
+            }
+        }
+        None
+    }
+    walk(value)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UsageBucket {
     pub requests: i64,
@@ -191,7 +235,6 @@ impl Backend {
                     .map_err(|_| anyhow::anyhow!("AGENTUSAGE_POSTGRES_URL is not set"))?;
                 Ok(Self::Postgres(postgres::PostgresStore::connect(&url)?))
             }
-            BackendMode::Jsonl => anyhow::bail!("JSONL fallback has no storage backend"),
         }
     }
 
@@ -205,7 +248,6 @@ impl Backend {
                     .map_err(|_| anyhow::anyhow!("AGENTUSAGE_POSTGRES_URL is not set"))?;
                 Ok(Self::Postgres(postgres::PostgresStore::connect(&url)?))
             }
-            BackendMode::Jsonl => anyhow::bail!("JSONL fallback has no read-only storage backend"),
         }
     }
 
@@ -226,7 +268,6 @@ impl Backend {
 pub enum BackendMode {
     Sqlite,
     Postgres,
-    Jsonl,
 }
 
 pub fn prepare_backend(interactive: bool) -> Result<BackendMode> {
@@ -235,12 +276,22 @@ pub fn prepare_backend(interactive: bool) -> Result<BackendMode> {
 
 pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<BackendMode> {
     let sqlite_path = crate::config::agent_db_path(agent)?;
-    if sqlite_path.exists() && sqlite::SqliteStore::open(&sqlite_path).is_ok() {
-        eprintln!(
-            "[agentusage] storage backend=sqlite path={}",
-            sqlite_path.display()
-        );
-        return Ok(BackendMode::Sqlite);
+    if sqlite_path.exists() {
+        match sqlite::SqliteStore::open(&sqlite_path) {
+            Ok(_) => {
+                eprintln!(
+                    "[agentusage] storage backend=sqlite path={}",
+                    sqlite_path.display()
+                );
+                return Ok(BackendMode::Sqlite);
+            }
+            Err(error) => {
+                eprintln!(
+                    "[agentusage] SQLite database exists but could not be opened path={} error={error:#}",
+                    sqlite_path.display()
+                );
+            }
+        }
     }
     let postgres_url = env::var("AGENTUSAGE_POSTGRES_URL")
         .ok()
@@ -252,8 +303,9 @@ pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<Backe
         return Ok(BackendMode::Postgres);
     }
     if !interactive || !io::stdin().is_terminal() {
-        eprintln!("[agentusage] storage backend=jsonl reason=no_initialized_database");
-        return Ok(BackendMode::Jsonl);
+        anyhow::bail!(
+            "no initialized SQLite or PostgreSQL usage storage found; run `agentusage sync {agent}` after selecting a database backend"
+        );
     }
     println!("No initialized usage storage backend was found.");
     println!("Choose the preferred backend:");
@@ -261,8 +313,7 @@ pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<Backe
     if postgres_url.is_some() {
         println!("[p] Initialize PostgreSQL from AGENTUSAGE_POSTGRES_URL");
     }
-    println!("[n] Use JSONL fallback without initializing a database");
-    println!("Enter your choice [s/p/n]:");
+    println!("Enter your choice [s/p]:");
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
     match answer.trim().to_ascii_lowercase().as_str() {
@@ -279,11 +330,7 @@ pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<Backe
             eprintln!("[agentusage] storage backend=postgres initialized");
             Ok(BackendMode::Postgres)
         }
-        _ => {
-            println!("Using JSONL fallback; no storage backend was initialized.");
-            eprintln!("[agentusage] storage backend=jsonl reason=user_selected_fallback");
-            Ok(BackendMode::Jsonl)
-        }
+        _ => anyhow::bail!("no storage backend selected; choose SQLite or PostgreSQL"),
     }
 }
 
@@ -412,4 +459,28 @@ fn add_bucket(target: &mut UsageBucket, value: &UsageBucket) {
     target.ai_units_nano += value.ai_units_nano;
     target.request_multiplier += value.request_multiplier;
     target.ai_credits += value.ai_credits;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quota_from_payload;
+
+    #[test]
+    fn extracts_quota_from_latest_codex_payload_shape() {
+        let payload = serde_json::json!({
+            "payload": {
+                "rate_limits": {
+                    "primary": {
+                        "used_percent": 26.0,
+                        "window_minutes": 10080,
+                        "resets_at": 1785091968
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            quota_from_payload(&payload),
+            Some((26.0, Some(10080), Some(1785091968)))
+        );
+    }
 }
