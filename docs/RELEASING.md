@@ -25,7 +25,8 @@ repository.
 Releases are driven by pushes to `main`; no manual version edit or tag is
 needed. The workflow serializes releases and, for each main-branch push:
 
-1. Bumps the patch version with `cargo set-version`.
+1. Bumps the minor version with `cargo set-version` (for example, `1.0.0` to
+   `1.1.0`).
 2. Generates a dated `CHANGELOG.md` section from commits since the previous
    release tag and prepares the same commit list as the GitHub release body.
 3. Runs formatting, compilation, tests, Clippy, and package checks.

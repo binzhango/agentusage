@@ -43,8 +43,8 @@ jobs:
       - name: Install cargo-edit
         run: cargo install cargo-edit --locked
 
-      - name: Bump patch version
-        run: cargo set-version --bump patch
+      - name: Bump minor version
+        run: cargo set-version --bump minor
 
       - name: Verify release source
         run: |
@@ -222,7 +222,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download archives
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
@@ -232,7 +232,7 @@ jobs:
         run: sha256sum *.tar.gz *.zip > SHA256SUMS
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.version.outputs.version }}
           body_path: dist/RELEASE_NOTES.md

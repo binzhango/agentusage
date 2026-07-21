@@ -7,6 +7,7 @@ mod server;
 mod storage;
 mod telemetry;
 mod tui;
+mod view;
 
 use anyhow::{Context, Result};
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Utc};

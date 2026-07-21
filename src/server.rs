@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{Duration, Local, NaiveDate};
 use serde::Serialize;
-use std::{process::Command, thread};
+use std::{collections::BTreeMap, process::Command, thread};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const PROVIDERS: [&str; 4] = ["codex", "claude_code", "opencode", "copilot"];
@@ -10,6 +10,16 @@ const PROVIDERS: [&str; 4] = ["codex", "claude_code", "opencode", "copilot"];
 struct ProviderStatus {
     name: String,
     available: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct TrendPoint {
+    date: NaiveDate,
+    total_tokens: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read_tokens: i64,
+    models: BTreeMap<String, i64>,
 }
 
 pub fn run(host: &str, port: u16, open: bool) -> Result<()> {
@@ -68,6 +78,16 @@ fn handle_request(request: Request) -> Result<()> {
             let summary = summary(provider, window)?;
             respond_json(request, summary)
         }
+        (&Method::Get, "/api/trend") => {
+            let query = url.split_once('?').map(|(_, value)| value).unwrap_or("");
+            let params = query_params(query);
+            let provider = params
+                .get("provider")
+                .map(String::as_str)
+                .unwrap_or("codex");
+            let window = params.get("window").map(String::as_str).unwrap_or("today");
+            respond_json(request, trend(provider, window)?)
+        }
         _ => {
             let response = Response::from_string("not found").with_status_code(StatusCode(404));
             request.respond(response)?;
@@ -93,6 +113,39 @@ fn summary(provider: &str, window: &str) -> Result<crate::storage::UsageSummary>
     let mut store = backend_for(provider)
         .with_context(|| format!("no initialized storage for provider {provider}"))?;
     store.quick_summary_for_agent(agent_name(provider), from, to)
+}
+
+fn trend(provider: &str, window: &str) -> Result<Vec<TrendPoint>> {
+    let (mut start, end) = window_dates(window)?;
+    // A useful chart for "all time" should remain readable and inexpensive.
+    // The summary endpoint still supports the complete all-time range.
+    if window == "all" || window == "all_time" {
+        start = end - Duration::days(89);
+    }
+    let mut points = Vec::new();
+    let mut day = start;
+    while day <= end {
+        let next = day + Duration::days(1);
+        let from = crate::local_midnight_utc(day);
+        let to = crate::local_midnight_utc(next);
+        let mut store = backend_for(provider)
+            .with_context(|| format!("no initialized storage for provider {provider}"))?;
+        let point = store.quick_summary_for_agent(agent_name(provider), from, to)?;
+        points.push(TrendPoint {
+            date: day,
+            total_tokens: point.total_tokens,
+            input_tokens: point.input_tokens,
+            output_tokens: point.output_tokens,
+            cache_read_tokens: point.cache_read_tokens,
+            models: point
+                .models
+                .into_iter()
+                .map(|(name, bucket)| (name, bucket.total_tokens))
+                .collect(),
+        });
+        day = next;
+    }
+    Ok(points)
 }
 
 fn backend_for(provider: &str) -> Result<crate::storage::Backend> {
@@ -129,7 +182,8 @@ fn query_params(query: &str) -> std::collections::BTreeMap<String, String> {
 }
 
 fn respond_html(request: Request) -> Result<()> {
-    let response = Response::from_string(INDEX_HTML).with_header(content_type("text/html"));
+    let response = Response::from_string(crate::view::index_html())
+        .with_header(content_type("text/html; charset=utf-8"));
     request.respond(response)?;
     Ok(())
 }
@@ -152,15 +206,6 @@ fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
     let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
 }
-
-const INDEX_HTML: &str = r#"<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Agentusage</title><style>
-body{margin:0;background:#181923;color:#ddd;font:15px ui-monospace,SFMono-Regular,Menlo,monospace}header{padding:18px 24px;border-bottom:1px solid #454557;display:flex;justify-content:space-between}main{padding:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}.card{border:1px solid #555568;border-radius:6px;padding:16px;background:#1e1f2b}.card h2{margin:0 0 12px;color:#e9b4c9}.muted{color:#8b8b9e}.metric{display:flex;justify-content:space-between;padding:5px 0}.controls{display:flex;gap:8px}button{background:#292a3a;color:#eee;border:1px solid #666;border-radius:4px;padding:6px 10px}pre{white-space:pre-wrap;color:#cfcfe3}
-</style></head><body><header><strong>● Agentusage</strong><span class="controls"><button data-window="today">Today</button><button data-window="7d">7 Days</button><button data-window="30d">30 Days</button><button data-window="all">All Time</button></span></header><main id="app"><p class="muted">Loading provider data…</p></main><script>
-let windowName='today';const app=document.querySelector('#app');document.querySelectorAll('button').forEach(b=>b.onclick=()=>{windowName=b.dataset.window;load()});
-async function load(){const providers=await fetch('/api/providers').then(r=>r.json());app.innerHTML='';for(const p of providers){const card=document.createElement('section');card.className='card';if(!p.available){card.innerHTML='<h2>'+p.name+'</h2><p class="muted">Unavailable</p>';app.append(card);continue}const s=await fetch('/api/summary?provider='+encodeURIComponent(p.name)+'&window='+windowName).then(r=>r.json());card.innerHTML='<h2>'+p.name+'</h2><div class="metric"><span>tokens</span><b>'+s.total_tokens+'</b></div><div class="metric"><span>requests</span><b>'+s.requests+'</b></div><div class="metric"><span>sessions</span><b>'+s.sessions+'</b></div><div class="metric"><span>cost</span><b>$'+Number(s.cost_usd).toFixed(6)+'</b></div><pre>'+JSON.stringify({models:s.models,clients:s.clients,projects:s.projects,tools:s.tools,languages:s.languages},null,2)+'</pre>';app.append(card)}}load();
-</script></body></html>"#;
 
 #[cfg(test)]
 mod tests {

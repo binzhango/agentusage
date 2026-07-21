@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">Agentusage terminal dashboard</title>
+  <desc id="desc">An interactive terminal dashboard showing provider cards, totals, models, and keyboard controls.</desc>
+  <rect width="1200" height="620" rx="18" fill="#111218"/>
+  <g font-family="ui-monospace, SFMono-Regular, monospace">
+    <circle cx="28" cy="28" r="6" fill="#f28f8f"/><circle cx="48" cy="28" r="6" fill="#f6c177"/><circle cx="68" cy="28" r="6" fill="#8ed1c5"/>
+    <text x="92" y="34" fill="#b9b9c8" font-size="14">au dashboard</text>
+    <rect x="18" y="54" width="1164" height="50" fill="#1e1f2b" stroke="#555568"/>
+    <text x="38" y="84" fill="#e9b4c9" font-size="20" font-weight="700">AGENTUSAGE</text><text x="220" y="84" fill="#ddd" font-size="15">Window: 7 Days</text><text x="1146" y="84" fill="#8b8b9e" font-size="13" text-anchor="end">w range  ·  r refresh  ·  q quit</text>
+    <g font-size="14">
+      <rect x="18" y="120" width="570" height="210" fill="#171821" stroke="#e9b4c9" stroke-width="2"/><text x="38" y="151" fill="#e9b4c9" font-size="18" font-weight="700">codex</text><text x="38" y="183" fill="#b9b9c8">tokens</text><text x="560" y="183" fill="#fff" text-anchor="end">4,821,360</text><text x="38" y="211" fill="#b9b9c8">requests</text><text x="560" y="211" fill="#fff" text-anchor="end">247</text><text x="38" y="239" fill="#b9b9c8">sessions</text><text x="560" y="239" fill="#fff" text-anchor="end">29</text><text x="38" y="267" fill="#b9b9c8">cost</text><text x="560" y="267" fill="#fff" text-anchor="end">$8.154920</text><text x="38" y="301" fill="#8ed1c5">top model: gpt-5</text>
+      <rect x="612" y="120" width="570" height="210" fill="#171821" stroke="#8ed1c5"/><text x="632" y="151" fill="#8ed1c5" font-size="18" font-weight="700">claude_code</text><text x="632" y="183" fill="#b9b9c8">tokens</text><text x="1154" y="183" fill="#fff" text-anchor="end">1,774,920</text><text x="632" y="211" fill="#b9b9c8">requests</text><text x="1154" y="211" fill="#fff" text-anchor="end">98</text><text x="632" y="239" fill="#b9b9c8">sessions</text><text x="1154" y="239" fill="#fff" text-anchor="end">14</text><text x="632" y="267" fill="#b9b9c8">cost</text><text x="1154" y="267" fill="#fff" text-anchor="end">$3.581040</text><text x="632" y="301" fill="#f6c177">top model: claude-sonnet</text>
+      <rect x="18" y="350" width="570" height="210" fill="#171821" stroke="#f6c177"/><text x="38" y="381" fill="#f6c177" font-size="18" font-weight="700">copilot</text><text x="38" y="413" fill="#b9b9c8">tokens</text><text x="560" y="413" fill="#fff" text-anchor="end">624,770</text><text x="38" y="441" fill="#b9b9c8">requests</text><text x="560" y="441" fill="#fff" text-anchor="end">73</text><text x="38" y="469" fill="#b9b9c8">sessions</text><text x="560" y="469" fill="#fff" text-anchor="end">8</text><text x="38" y="497" fill="#b9b9c8">AI credits</text><text x="560" y="497" fill="#fff" text-anchor="end">41.5</text><text x="38" y="531" fill="#9db5ff">clients: VS Code, CLI</text>
+      <rect x="612" y="350" width="570" height="210" fill="#171821" stroke="#9db5ff"/><text x="632" y="381" fill="#9db5ff" font-size="18" font-weight="700">opencode</text><text x="632" y="423" fill="#8b8b9e">No usage in this window.</text><text x="632" y="462" fill="#b9b9c8">Last sync</text><text x="1154" y="462" fill="#fff" text-anchor="end">2m ago</text><text x="632" y="500" fill="#8ed1c5">ready</text>
+    </g>
+    <text x="18" y="596" fill="#8b8b9e" font-size="13">Database-backed · local-only by default · live refresh</text>
+  </g>
+</svg>

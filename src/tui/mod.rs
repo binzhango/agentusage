@@ -48,6 +48,17 @@ impl Window {
             Self::All => "All Time",
         }
     }
+    fn index(self) -> usize {
+        match self {
+            Self::Today => 0,
+            Self::SevenDays => 1,
+            Self::ThirtyDays => 2,
+            Self::All => 3,
+        }
+    }
+    fn all() -> [Self; 4] {
+        [Self::Today, Self::SevenDays, Self::ThirtyDays, Self::All]
+    }
     fn dates(self) -> (NaiveDate, NaiveDate) {
         let end = Local::now().date_naive();
         let start = match self {
@@ -75,6 +86,7 @@ struct ProviderData {
     cache_read_tokens: i64,
     cache_write_tokens: i64,
     cost_usd: f64,
+    spending_by_window: [f64; 4],
     ai_credits: f64,
     lines_added: i64,
     lines_removed: i64,
@@ -82,7 +94,7 @@ struct ProviderData {
     files_with_usage: usize,
     token_records: usize,
     malformed_lines: usize,
-    models: Vec<(String, i64, f64)>,
+    models: Vec<ModelUsage>,
     clients: Vec<(String, i64, f64)>,
     projects: Vec<(String, i64, f64)>,
     tools: Vec<(String, usize)>,
@@ -91,6 +103,17 @@ struct ProviderData {
     primary_window_minutes: Option<i64>,
     desktop_signal: Option<(i64, i64)>,
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ModelUsage {
+    name: String,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read_tokens: i64,
+    cache_write_tokens: i64,
+    total_tokens: i64,
+    cost_usd: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -442,73 +465,162 @@ impl Dashboard {
         let inner_width = area.width.saturating_sub(2);
         lines.push(Line::from("─".repeat(inner_width as usize)));
         lines.push(section_line("⚡ Usage", Color::Yellow, inner_width));
-        lines.push(Line::from(format!(
-            "Status {} · volume {} · token records {} · prompts {} · +{} -{}",
-            usage_status(provider),
-            compact(provider.total_tokens),
-            provider.requests,
-            provider.prompts,
-            provider.lines_added,
-            provider.lines_removed
-        )));
-        lines.push(Line::from(rate_limit_bar(
+        let usage_widths = [16, 26, 16, 26];
+        lines.push(table_border(&usage_widths, '┌', '┬', '┐'));
+        lines.push(table_header_row(
+            &["metric", "value", "metric", "value"].map(str::to_owned),
+            &usage_widths,
+            &[false, false, false, false],
+        ));
+        lines.push(table_border(&usage_widths, '├', '┼', '┤'));
+        for cells in [
+            vec![
+                "status".to_owned(),
+                usage_status(provider),
+                "window".to_owned(),
+                usage_window(provider),
+            ],
+            vec![
+                "volume".to_owned(),
+                format!("{} tok", compact(provider.total_tokens)),
+                "requests".to_owned(),
+                provider.requests.to_string(),
+            ],
+            vec![
+                "token records".to_owned(),
+                provider.token_records.to_string(),
+                "prompts".to_owned(),
+                provider.prompts.to_string(),
+            ],
+            vec![
+                "code changes".to_owned(),
+                format!("+{} / -{}", provider.lines_added, provider.lines_removed),
+                "".to_owned(),
+                "".to_owned(),
+            ],
+        ] {
+            lines.push(table_row(
+                &cells,
+                &usage_widths,
+                &[false, false, false, false],
+            ));
+        }
+        lines.push(table_border(&usage_widths, '└', '┴', '┘'));
+        lines.push(Line::from("Quota remaining"));
+        lines.push(rate_limit_bar(
             provider.primary_used_percent,
             area.width.saturating_sub(22) as usize,
-        )));
+        ));
         lines.push(Line::from(""));
         lines.push(section_line("💰 Spending", Color::Green, inner_width));
-        lines.push(Line::from(format!(
-            "All-Time Cost  ${:.6}    AI credits {:.4}",
-            provider.cost_usd, provider.ai_credits
-        )));
+        let spending_widths = [14, 18];
+        lines.push(table_border(&spending_widths, '┌', '┬', '┐'));
+        lines.push(table_header_row(
+            &["window", "cost"].map(str::to_owned),
+            &spending_widths,
+            &[false, true],
+        ));
+        lines.push(table_border(&spending_widths, '├', '┼', '┤'));
+        for window in Window::all() {
+            let style = if window == self.snapshot.window {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(
+                table_row(
+                    &[
+                        window.label().to_owned(),
+                        format!("${:.6}", provider.spending_by_window[window.index()]),
+                    ],
+                    &spending_widths,
+                    &[false, true],
+                )
+                .style(style),
+            );
+        }
+        lines.push(table_border(&spending_widths, '└', '┴', '┘'));
+        lines.push(Line::from(format!("AI credits {:.4}", provider.ai_credits)));
         lines.push(Line::from(""));
         lines.push(section_line(
             "Model Burn",
             Color::Rgb(220, 190, 130),
             inner_width,
         ));
-        lines.push(Line::from(format!(
-            "Total tokens {}  ·  Cache rate {:.1}%",
-            compact(provider.total_tokens),
-            cache_rate(provider).unwrap_or(0.0)
-        )));
+        lines.push(Line::from(vec![
+            Span::styled("Total tokens ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                compact(provider.total_tokens),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  ·  Cache rate ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{:.1}%", cache_rate(provider).unwrap_or(0.0)),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
         if provider.models.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  No model data for this time range",
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            let widths = [3, 28, 9, 16, 12];
+            let longest_model = provider
+                .models
+                .iter()
+                .map(|model| model.name.chars().count())
+                .max()
+                .unwrap_or(28);
+            // The other model columns consume 68 terminal cells including
+            // borders and padding. Use the remaining space for model names so
+            // long names remain visible whenever the terminal can accommodate
+            // them.
+            let model_width = longest_model
+                .min(inner_width.saturating_sub(68) as usize)
+                .max(20);
+            let widths = [3, model_width, 12, 12, 14, 14, 12];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
-                &["#", "model", "share", "tokens", "cost"].map(str::to_owned),
+            lines.push(table_header_row(
+                &[
+                    "#",
+                    "model",
+                    "input",
+                    "output",
+                    "cache_read",
+                    "cache_write",
+                    "total",
+                ]
+                .map(str::to_owned),
                 &widths,
-                &[true, false, true, true, true],
+                &[true, false, true, true, true, true, true],
             ));
             lines.push(table_border(&widths, '├', '┼', '┤'));
-            for (rank, (model, tokens, cost)) in provider.models.iter().take(8).enumerate() {
-                let share = if provider.total_tokens > 0 {
-                    *tokens as f64 / provider.total_tokens as f64 * 100.0
-                } else {
-                    0.0
-                };
+            for (rank, model) in provider.models.iter().enumerate() {
                 lines.push(table_row(
                     &[
                         (rank + 1).to_string(),
-                        truncate(model, 28),
-                        format!("{share:.1}%"),
-                        format!("{} tok", compact(*tokens)),
-                        format!("${cost:.5}"),
+                        truncate(&model.name, model_width),
+                        compact(model.input_tokens),
+                        compact(model.output_tokens),
+                        compact(model.cache_read_tokens),
+                        compact(model.cache_write_tokens),
+                        compact(model.total_tokens),
                     ],
                     &widths,
-                    &[true, false, true, true, true],
+                    &[true, false, true, true, true, true, true],
                 ));
             }
             lines.push(table_border(&widths, '└', '┴', '┘'));
             lines.push(Line::from("Token Breakdown"));
             let token_widths = [14, 14, 16, 14, 14];
             lines.push(table_border(&token_widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["input", "output", "cache read", "reasoning", "total"].map(str::to_owned),
                 &token_widths,
                 &[false, false, false, false, false],
@@ -541,7 +653,7 @@ impl Dashboard {
         } else {
             let widths = [3, 32, 16, 12];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["#", "client", "tokens", "cost"].map(str::to_owned),
                 &widths,
                 &[true, false, true, true],
@@ -575,7 +687,7 @@ impl Dashboard {
         } else {
             let widths = [3, 32, 16, 12];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["#", "project", "tokens", "cost"].map(str::to_owned),
                 &widths,
                 &[true, false, true, true],
@@ -605,7 +717,7 @@ impl Dashboard {
         } else {
             let widths = [3, 32, 14];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["#", "tool", "calls"].map(str::to_owned),
                 &widths,
                 &[true, false, true],
@@ -639,7 +751,7 @@ impl Dashboard {
             let total: usize = provider.languages.iter().map(|(_, count)| *count).sum();
             let widths = [22, 9, 12];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_row(
+            lines.push(table_header_row(
                 &["language", "share", "requests"].map(str::to_owned),
                 &widths,
                 &[false, true, true],
@@ -661,26 +773,53 @@ impl Dashboard {
         }
         lines.push(Line::from(""));
         lines.push(section_line("Other Data", Color::DarkGray, inner_width));
-        lines.push(Line::from(format!(
-            "  Today messages {} · input {} · output {}",
-            provider.prompts,
-            compact(provider.input_tokens),
-            compact(provider.output_tokens)
-        )));
-        lines.push(Line::from(format!(
-            "  Window requests {} · window tokens {}",
-            provider.requests,
-            compact(provider.total_tokens)
-        )));
-        lines.push(Line::from(format!(
-            "  Files scanned {} · usage files {} · token records {}",
-            provider.files_scanned, provider.files_with_usage, provider.token_records
-        )));
-        lines.push(Line::from(format!(
-            "  Malformed lines {} · cache writes {}",
-            provider.malformed_lines,
-            compact(provider.cache_write_tokens)
-        )));
+        let other_widths = [20, 18, 20, 18];
+        lines.push(table_border(&other_widths, '┌', '┬', '┐'));
+        lines.push(table_header_row(
+            &["metric", "value", "metric", "value"].map(str::to_owned),
+            &other_widths,
+            &[false, false, false, false],
+        ));
+        lines.push(table_border(&other_widths, '├', '┼', '┤'));
+        for cells in [
+            vec![
+                "today messages".to_owned(),
+                provider.prompts.to_string(),
+                "input tokens".to_owned(),
+                compact(provider.input_tokens),
+            ],
+            vec![
+                "window requests".to_owned(),
+                provider.requests.to_string(),
+                "output tokens".to_owned(),
+                compact(provider.output_tokens),
+            ],
+            vec![
+                "window tokens".to_owned(),
+                compact(provider.total_tokens),
+                "cache writes".to_owned(),
+                compact(provider.cache_write_tokens),
+            ],
+            vec![
+                "files scanned".to_owned(),
+                provider.files_scanned.to_string(),
+                "usage files".to_owned(),
+                provider.files_with_usage.to_string(),
+            ],
+            vec![
+                "token records".to_owned(),
+                provider.token_records.to_string(),
+                "malformed lines".to_owned(),
+                provider.malformed_lines.to_string(),
+            ],
+        ] {
+            lines.push(table_row(
+                &cells,
+                &other_widths,
+                &[false, false, false, false],
+            ));
+        }
+        lines.push(table_border(&other_widths, '└', '┴', '┘'));
         lines.push(Line::from(""));
         lines.push(section_line("⏰ Timers", Color::Red, inner_width));
         if let Some((five, seven)) = provider.desktop_signal {
@@ -735,27 +874,15 @@ impl Dashboard {
             "OK"
         };
         let name = provider_label(&provider.name);
-        let mut lines = vec![Line::from(vec![
-            Span::styled(
-                if selected { "▶ " } else { "● " },
-                Style::default()
-                    .fg(if selected { Color::Cyan } else { color })
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                name,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("                                      "),
-            Span::styled(
-                format!("◷ {} {}", self.snapshot.window.label(), status),
-                Style::default().fg(if status == "OK" {
-                    Color::Green
-                } else {
-                    Color::Yellow
-                }),
-            ),
-        ])];
+        let header_left = format!("{}{}", if selected { "▶ " } else { "● " }, name);
+        let header_right = format!("◷ {} {}", self.snapshot.window.label(), status);
+        let header = aligned_header(&header_left, &header_right, area.width.saturating_sub(2));
+        let mut lines = vec![Line::from(vec![Span::styled(
+            header,
+            Style::default()
+                .fg(if status == "OK" { color } else { Color::Yellow })
+                .add_modifier(Modifier::BOLD),
+        )])];
         lines.push(Line::from(Span::styled(
             format!("⚡ Usage · {}", provider.name),
             Style::default()
@@ -775,38 +902,66 @@ impl Dashboard {
             )));
         } else {
             let cached = cache_rate(provider);
-            lines.push(Line::from(format!(
-                "Prompts: {} prompts    Token records: {}",
-                provider.prompts, provider.requests
-            )));
-            lines.push(Line::from(format!(
-                "Model Burn   {} tok",
-                compact(provider.total_tokens)
-            )));
-            lines.push(Line::from(rate_limit_bar(
+            let value_width = area.width.saturating_sub(28).max(18) as usize;
+            let summary_widths = [18, value_width];
+            lines.push(table_border(&summary_widths, '┌', '┬', '┐'));
+            lines.push(table_header_row(
+                &["metric", "value"].map(str::to_owned),
+                &summary_widths,
+                &[false, false],
+            ));
+            lines.push(table_border(&summary_widths, '├', '┼', '┤'));
+            for cells in [
+                vec!["prompts".to_owned(), provider.prompts.to_string()],
+                vec!["token records".to_owned(), provider.requests.to_string()],
+                vec![
+                    "model burn".to_owned(),
+                    format!("{} tok", compact(provider.total_tokens)),
+                ],
+                vec!["sessions".to_owned(), provider.sessions.to_string()],
+                vec!["cost".to_owned(), format!("${:.5}", provider.cost_usd)],
+                vec![
+                    "credits / clients".to_owned(),
+                    format!("{:.3} / {}", provider.ai_credits, provider.clients.len()),
+                ],
+            ] {
+                lines.push(table_row(&cells, &summary_widths, &[false, false]));
+            }
+            lines.push(table_border(&summary_widths, '└', '┴', '┘'));
+            lines.push(rate_limit_bar(
                 provider.primary_used_percent,
-                area.width.saturating_sub(18) as usize,
-            )));
+                area.width.saturating_sub(26) as usize,
+            ));
             lines.push(Line::from(format!(
-                "Sessions {} · {} token records · +{} -{}",
-                provider.sessions, provider.requests, provider.lines_added, provider.lines_removed
-            )));
-            lines.push(Line::from(format!(
-                "Token Breakdown · {}% cached",
+                "Changes +{} / -{} · {}% cached",
+                provider.lines_added,
+                provider.lines_removed,
                 cached
                     .map(|v| format!("{v:.0}"))
                     .unwrap_or_else(|| "n/a".into())
             )));
-            lines.push(Line::from(
-                "              in        out      cache.r    reason     total",
+            let model_widths = [3, value_width.saturating_sub(12).max(12), 10];
+            lines.push(table_header_row(
+                &["#", "top models", "tokens"].map(str::to_owned),
+                &model_widths,
+                &[true, false, true],
             ));
-            for (model, tokens, _) in provider.models.iter().take(3) {
-                lines.push(Line::from(format!(
-                    "  {:<20} {:>8}  {:>8}",
-                    truncate(model, 20),
-                    compact(*tokens),
-                    ""
-                )));
+            for model in provider.models.iter().take(3) {
+                let rank = provider
+                    .models
+                    .iter()
+                    .position(|value| value.name == model.name)
+                    .map(|rank| rank + 1)
+                    .unwrap_or_default();
+                lines.push(table_row(
+                    &[
+                        rank.to_string(),
+                        truncate(&model.name, model_widths[1]),
+                        compact(model.total_tokens),
+                    ],
+                    &model_widths,
+                    &[true, false, true],
+                ));
             }
             if provider.models.is_empty() {
                 lines.push(Line::from(Span::styled(
@@ -814,12 +969,6 @@ impl Dashboard {
                     Style::default().fg(Color::DarkGray),
                 )));
             }
-            lines.push(Line::from(format!(
-                "Cost ${:.5} · Credits {:.3} · Clients {}",
-                provider.cost_usd,
-                provider.ai_credits,
-                provider.clients.len()
-            )));
         }
         frame.render_widget(
             Paragraph::new(lines)
@@ -978,12 +1127,12 @@ impl Dashboard {
             Line::from(""),
             Line::from("Top models"),
         ];
-        for (name, tokens, cost) in p.models.iter().take(3) {
+        for model in p.models.iter().take(3) {
             lines.push(Line::from(format!(
                 "  {:<28} {:>10}  ${:.5}",
-                name,
-                compact(*tokens),
-                cost
+                model.name,
+                compact(model.total_tokens),
+                model.cost_usd
             )));
         }
         lines.push(Line::from(""));
@@ -1076,6 +1225,7 @@ fn load_provider(
     }
     match crate::report_for_period(name, start, end, backend) {
         Ok(report) => {
+            let spending_by_window = load_spending_windows(name, backend);
             let rate_limit = if ingest {
                 let cached = load_cached_provider(name, start, end, backend);
                 (cached.primary_used_percent, cached.primary_window_minutes)
@@ -1085,7 +1235,15 @@ fn load_provider(
             let mut models: Vec<_> = report
                 .models
                 .into_iter()
-                .map(|(n, u)| (n, u.total, u.cost_usd))
+                .map(|(name, usage)| ModelUsage {
+                    name,
+                    input_tokens: usage.input,
+                    output_tokens: usage.output,
+                    cache_read_tokens: usage.cache_read,
+                    cache_write_tokens: usage.cache_write,
+                    total_tokens: usage.total,
+                    cost_usd: usage.cost_usd,
+                })
                 .collect();
             let mut clients: Vec<_> = report
                 .clients
@@ -1097,7 +1255,11 @@ fn load_provider(
                 .into_iter()
                 .map(|(n, u)| (project_label(&n), u.total, u.cost_usd))
                 .collect();
-            models.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            models.sort_by(|a, b| {
+                b.total_tokens
+                    .cmp(&a.total_tokens)
+                    .then_with(|| a.name.cmp(&b.name))
+            });
             clients.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             projects.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             let mut tools: Vec<_> = report.tools.into_iter().collect();
@@ -1117,6 +1279,7 @@ fn load_provider(
                 cache_read_tokens: report.cached_input_tokens,
                 cache_write_tokens: report.cache_write_tokens,
                 cost_usd: report.cost_usd,
+                spending_by_window,
                 ai_credits: report.ai_credits,
                 lines_added: report.lines_added,
                 lines_removed: report.lines_removed,
@@ -1158,10 +1321,19 @@ fn load_cached_provider(
         });
     match result {
         Ok(summary) => {
+            let spending_by_window = load_spending_windows(name, backend);
             let mut models: Vec<_> = summary
                 .models
                 .into_iter()
-                .map(|(n, u)| (n, u.total_tokens, u.cost_usd))
+                .map(|(name, usage)| ModelUsage {
+                    name,
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cache_read_tokens: usage.cache_read_tokens,
+                    cache_write_tokens: usage.cache_write_tokens,
+                    total_tokens: usage.total_tokens,
+                    cost_usd: usage.cost_usd,
+                })
                 .collect();
             let mut clients: Vec<_> = summary
                 .clients
@@ -1183,7 +1355,11 @@ fn load_cached_provider(
                 .into_iter()
                 .map(|(name, count)| (name, count as usize))
                 .collect();
-            models.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            models.sort_by(|a, b| {
+                b.total_tokens
+                    .cmp(&a.total_tokens)
+                    .then_with(|| a.name.cmp(&b.name))
+            });
             clients.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             projects.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             tools.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -1201,6 +1377,7 @@ fn load_cached_provider(
                 cache_read_tokens: summary.cache_read_tokens,
                 cache_write_tokens: summary.cache_write_tokens,
                 cost_usd: summary.cost_usd,
+                spending_by_window,
                 ai_credits: summary.ai_credits,
                 lines_added: summary.lines_added,
                 lines_removed: summary.lines_removed,
@@ -1222,6 +1399,22 @@ fn load_cached_provider(
             ..Default::default()
         },
     }
+}
+
+fn load_spending_windows(name: &str, backend: crate::storage::BackendMode) -> [f64; 4] {
+    let Ok(mut store) = crate::storage::Backend::open_read_only_for_agent(backend, name) else {
+        return [0.0; 4];
+    };
+    let agent = crate::agent_name_for_report(name);
+    Window::all().map(|window| {
+        let (start, end) = window.dates();
+        let from = crate::local_midnight_utc(start);
+        let to = crate::local_midnight_utc(end + ChronoDuration::days(1));
+        store
+            .quick_summary_for_agent(agent, from, to)
+            .map(|summary| summary.cost_usd)
+            .unwrap_or_default()
+    })
 }
 
 fn compact(value: i64) -> String {
@@ -1291,6 +1484,7 @@ fn table_border(widths: &[usize], left: char, separator: char, right: char) -> L
 fn table_row(cells: &[String], widths: &[usize], right_aligned: &[bool]) -> Line<'static> {
     let mut value = String::from("│");
     for ((cell, width), right_align) in cells.iter().zip(widths).zip(right_aligned) {
+        let cell = truncate(cell, *width);
         let cell = if *right_align {
             format!("{cell:>width$}")
         } else {
@@ -1301,6 +1495,14 @@ fn table_row(cells: &[String], widths: &[usize], right_aligned: &[bool]) -> Line
         value.push_str(" │");
     }
     Line::from(value)
+}
+
+fn table_header_row(cells: &[String], widths: &[usize], right_aligned: &[bool]) -> Line<'static> {
+    table_row(cells, widths, right_aligned).style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 fn aligned_header(left: &str, right: &str, width: u16) -> String {
@@ -1318,38 +1520,54 @@ fn cache_rate(provider: &ProviderData) -> Option<f64> {
 }
 
 fn usage_status(provider: &ProviderData) -> String {
-    match (
-        provider.primary_used_percent,
-        provider.primary_window_minutes,
-    ) {
-        (Some(used), Some(window)) => {
-            format!(
-                "{:.1}% remaining ({used:.1}% used) · {}d window",
-                (100.0 - used).clamp(0.0, 100.0),
-                window / 1440
-            )
-        }
-        (Some(used), None) => format!(
-            "{:.1}% remaining ({used:.1}% used)",
+    match provider.primary_used_percent {
+        Some(used) => format!(
+            "{:.1}% left · {used:.1}% used",
             (100.0 - used).clamp(0.0, 100.0)
         ),
         _ => "quota unavailable".into(),
     }
 }
 
-fn rate_limit_bar(used: Option<f64>, width: usize) -> String {
+fn usage_window(provider: &ProviderData) -> String {
+    provider
+        .primary_window_minutes
+        .map(|minutes| format!("{}d window", minutes / 1440))
+        .unwrap_or_else(|| "window unavailable".into())
+}
+
+fn rate_limit_bar(used: Option<f64>, width: usize) -> Line<'static> {
     let width = width.max(10);
     let Some(used) = used else {
-        return format!("Usage     {} quota unavailable", "·".repeat(width));
+        return Line::from(vec![
+            Span::raw("Usage     "),
+            Span::styled(
+                format!("{} quota unavailable", "·".repeat(width)),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
     };
     let remaining = (100.0 - used).clamp(0.0, 100.0);
     let filled = (remaining / 100.0 * width as f64).round() as usize;
-    format!(
-        "Quota     {}{} {:>4.1}% left",
-        "█".repeat(filled),
-        "·".repeat(width - filled),
-        remaining
-    )
+    let color = if remaining < 10.0 {
+        Color::Red
+    } else if remaining < 30.0 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+    Line::from(vec![
+        Span::raw("Quota     "),
+        Span::styled(
+            "█".repeat(filled),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "·".repeat(width - filled),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw(format!(" {:>4.1}% left", remaining)),
+    ])
 }
 
 fn truncate(value: &str, max: usize) -> String {

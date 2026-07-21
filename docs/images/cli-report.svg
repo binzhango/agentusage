@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">Agentusage command-line report</title>
+  <desc id="desc">A command-line report with usage totals, token breakdown, models, projects, tools, and languages.</desc>
+  <rect width="1200" height="620" rx="18" fill="#111218"/>
+  <g font-family="ui-monospace, SFMono-Regular, monospace">
+    <circle cx="28" cy="28" r="6" fill="#f28f8f"/><circle cx="48" cy="28" r="6" fill="#f6c177"/><circle cx="68" cy="28" r="6" fill="#8ed1c5"/>
+    <text x="92" y="34" fill="#b9b9c8" font-size="14">terminal</text>
+    <text x="28" y="78" fill="#8ed1c5" font-size="16">$</text><text x="52" y="78" fill="#f7f2f4" font-size="16">au weekly --provider codex</text>
+    <text x="28" y="116" fill="#e9b4c9" font-size="22" font-weight="700">Codex usage · 2026-07-15 → 2026-07-21</text>
+    <line x1="28" y1="132" x2="1170" y2="132" stroke="#454557"/>
+    <g font-size="15"><text x="28" y="166" fill="#b9b9c8">requests</text><text x="220" y="166" fill="#fff">247</text><text x="340" y="166" fill="#b9b9c8">sessions</text><text x="520" y="166" fill="#fff">29</text><text x="640" y="166" fill="#b9b9c8">estimated cost</text><text x="850" y="166" fill="#fff">$8.154920</text></g>
+    <text x="28" y="213" fill="#d9a7c0" font-size="18" font-weight="700">Tokens</text>
+    <g font-size="14"><text x="28" y="246" fill="#8b8b9e">input</text><text x="190" y="246" fill="#fff">3,720,480</text><text x="360" y="246" fill="#8b8b9e">output</text><text x="522" y="246" fill="#fff">1,100,880</text><text x="700" y="246" fill="#8b8b9e">cache read</text><text x="878" y="246" fill="#fff">2,916,400</text><text x="1040" y="246" fill="#8b8b9e">total</text><text x="1170" y="246" fill="#fff" text-anchor="end">4,821,360</text></g>
+    <line x1="28" y1="268" x2="1170" y2="268" stroke="#38394a"/>
+    <text x="28" y="310" fill="#d9a7c0" font-size="18" font-weight="700">Models</text>
+    <g font-size="14"><text x="28" y="342" fill="#8b8b9e">model</text><text x="540" y="342" fill="#8b8b9e">requests</text><text x="760" y="342" fill="#8b8b9e">tokens</text><text x="1170" y="342" fill="#8b8b9e" text-anchor="end">share</text><text x="28" y="374" fill="#e9b4c9">gpt-5</text><text x="540" y="374" fill="#ddd">192</text><text x="760" y="374" fill="#ddd">3,964,802</text><text x="1170" y="374" fill="#8ed1c5" text-anchor="end">82.2%</text><text x="28" y="404" fill="#e9b4c9">codex-auto-review</text><text x="540" y="404" fill="#ddd">55</text><text x="760" y="404" fill="#ddd">856,558</text><text x="1170" y="404" fill="#f6c177" text-anchor="end">17.8%</text></g>
+    <line x1="28" y1="428" x2="1170" y2="428" stroke="#38394a"/>
+    <text x="28" y="470" fill="#d9a7c0" font-size="18" font-weight="700">Activity</text>
+    <g font-size="14"><text x="28" y="502" fill="#8b8b9e">top project</text><text x="190" y="502" fill="#ddd">agentusage</text><text x="430" y="502" fill="#8b8b9e">top tool</text><text x="560" y="502" fill="#ddd">exec_command</text><text x="800" y="502" fill="#8b8b9e">language</text><text x="940" y="502" fill="#ddd">Rust</text><text x="28" y="534" fill="#8b8b9e">lines added</text><text x="190" y="534" fill="#8ed1c5">+1,284</text><text x="430" y="534" fill="#8b8b9e">lines removed</text><text x="590" y="534" fill="#f28f8f">-312</text><text x="800" y="534" fill="#8b8b9e">cache hit</text><text x="940" y="534" fill="#ddd">60.5%</text></g>
+    <text x="28" y="586" fill="#8b8b9e" font-size="13">daily · weekly · monthly · yearly · custom date range</text>
+  </g>
+</svg>
