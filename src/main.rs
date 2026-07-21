@@ -35,11 +35,6 @@ enum Command {
         #[arg(long)]
         open: bool,
     },
-    #[command(name = "command")]
-    Report {
-        #[command(subcommand)]
-        command: ReportCommand,
-    },
     Telemetry {
         #[command(subcommand)]
         command: TelemetryCommand,
@@ -98,42 +93,6 @@ struct SyncArgs {
 }
 
 #[derive(Debug, Subcommand)]
-enum ReportCommand {
-    Daily {
-        #[arg(long, default_value = "codex")]
-        provider: String,
-        #[arg(long)]
-        date: Option<String>,
-    },
-    Weekly {
-        #[arg(long, default_value = "codex")]
-        provider: String,
-        #[arg(long)]
-        date: Option<String>,
-    },
-    Monthly {
-        #[arg(long, default_value = "codex")]
-        provider: String,
-        #[arg(long)]
-        month: Option<String>,
-    },
-    Yearly {
-        #[arg(long, default_value = "codex")]
-        provider: String,
-        #[arg(long)]
-        year: Option<i32>,
-    },
-    Range {
-        #[arg(long, default_value = "codex")]
-        provider: String,
-        #[arg(long)]
-        from: String,
-        #[arg(long)]
-        to: String,
-    },
-}
-
-#[derive(Debug, Subcommand)]
 enum TelemetryCommand {
     Hook {
         source: String,
@@ -163,7 +122,6 @@ fn main() -> Result<()> {
         }
         Some(Command::Dashboard) => tui::run(),
         Some(Command::Server { host, port, open }) => server::run(&host, port, open),
-        Some(Command::Report { command }) => run_report_command(command),
         Some(Command::Telemetry { command }) => match command {
             TelemetryCommand::Hook {
                 source,
@@ -265,70 +223,6 @@ fn parse_date_or_today(value: Option<&str>) -> Result<NaiveDate> {
                 .with_context(|| format!("invalid date {value:?}; expected YYYY-MM-DD"))
         })
         .unwrap_or_else(|| Ok(Local::now().date_naive()))
-}
-
-fn run_report_command(command: ReportCommand) -> Result<()> {
-    match command {
-        ReportCommand::Daily { provider, date } => {
-            let backend = prepare_report_backend(&provider)?;
-            validate_provider(&provider)?;
-            let target = parse_date_or_today(date.as_deref())?;
-            print_report(&report_for_period(&provider, target, target, backend)?);
-        }
-        ReportCommand::Weekly { provider, date } => {
-            let backend = prepare_report_backend(&provider)?;
-            validate_provider(&provider)?;
-            let anchor = parse_date_or_today(date.as_deref())?;
-            let start =
-                anchor - chrono::Duration::days(anchor.weekday().num_days_from_monday() as i64);
-            print_report(&report_for_period(
-                &provider,
-                start,
-                start + chrono::Duration::days(6),
-                backend,
-            )?);
-        }
-        ReportCommand::Monthly { provider, month } => {
-            let backend = prepare_report_backend(&provider)?;
-            validate_provider(&provider)?;
-            let value = month.unwrap_or_else(|| Local::now().format("%Y-%m").to_string());
-            let start = NaiveDate::parse_from_str(&format!("{value}-01"), "%Y-%m-%d")
-                .with_context(|| format!("invalid month {value:?}; expected YYYY-MM"))?;
-            let next = if start.month() == 12 {
-                NaiveDate::from_ymd_opt(start.year() + 1, 1, 1).unwrap()
-            } else {
-                NaiveDate::from_ymd_opt(start.year(), start.month() + 1, 1).unwrap()
-            };
-            print_report(&report_for_period(
-                &provider,
-                start,
-                next - chrono::Duration::days(1),
-                backend,
-            )?);
-        }
-        ReportCommand::Yearly { provider, year } => {
-            let backend = prepare_report_backend(&provider)?;
-            validate_provider(&provider)?;
-            let year = year.unwrap_or_else(|| Local::now().year());
-            let start = NaiveDate::from_ymd_opt(year, 1, 1).context("invalid year")?;
-            print_report(&report_for_period(
-                &provider,
-                start,
-                NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-                backend,
-            )?);
-        }
-        ReportCommand::Range { provider, from, to } => {
-            let backend = prepare_report_backend(&provider)?;
-            validate_provider(&provider)?;
-            let start = NaiveDate::parse_from_str(&from, "%Y-%m-%d")
-                .with_context(|| format!("invalid --from {from:?}"))?;
-            let end = NaiveDate::parse_from_str(&to, "%Y-%m-%d")
-                .with_context(|| format!("invalid --to {to:?}"))?;
-            print_report(&report_for_period(&provider, start, end, backend)?);
-        }
-    }
-    Ok(())
 }
 
 fn prepare_report_backend(provider: &str) -> Result<storage::BackendMode> {
