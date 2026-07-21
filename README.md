@@ -85,7 +85,7 @@ flowchart LR
     Config -. controls background sync .-> Server
 ```
 
-Provider files are read only by ingestion. Commands, the terminal dashboard,
+Provider files are read only by synchronization. Commands, the terminal dashboard,
 and the server query SQLite/PostgreSQL tables; quota is calculated from the
 latest persisted raw provider event, while usage and credits are aggregated
 from normalized usage events.
@@ -159,8 +159,8 @@ and JSON API without exposing usage data to the network. Use `--host` and
 
 On first use, the CLI checks for an initialized database. If none exists, it
 asks whether to initialize SQLite or use PostgreSQL. Reports never read
-provider files directly; run `agentusage ingest --provider <provider>` to
-import provider data into the selected database first.
+provider files directly. Run `agentusage sync <provider>` to synchronize provider
+data into the selected database when needed.
 
 ## Reports
 
@@ -205,12 +205,16 @@ Reports include:
 - tool-call and language breakdowns for imported provider telemetry;
 - Copilot AI credits and native AI-unit values when the source provides them.
 
-Provider files can be imported from an alternate source directory during the
-explicit ingestion step:
+Provider files can be imported from an alternate source directory during an
+explicit synchronization:
 
 ```bash
-agentusage ingest --provider codex --sessions-dir /path/to/codex/sessions
+agentusage sync codex --sessions-dir /path/to/codex/sessions
 ```
+
+The provider is a positional argument for readability. The compatibility forms
+`agentusage sync --provider codex` and `agentusage ingest --provider codex` are
+also supported.
 
 ## Supported providers
 

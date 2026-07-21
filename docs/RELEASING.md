@@ -66,4 +66,4 @@ agentusage daily --provider copilot
 ```
 
 For a clean machine, confirm the first-run storage prompt rejects report access
-until SQLite or PostgreSQL is initialized, then test provider ingestion.
+until SQLite or PostgreSQL is initialized, then test provider synchronization.

@@ -304,7 +304,7 @@ pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<Backe
     }
     if !interactive || !io::stdin().is_terminal() {
         anyhow::bail!(
-            "no initialized SQLite or PostgreSQL usage storage found; run `agentusage ingest --provider {agent}` after selecting a database backend"
+            "no initialized SQLite or PostgreSQL usage storage found; run `agentusage sync {agent}` after selecting a database backend"
         );
     }
     println!("No initialized usage storage backend was found.");

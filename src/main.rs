@@ -10,7 +10,7 @@ mod tui;
 
 use anyhow::{Context, Result};
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Utc};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::io::{self, Read};
 
 #[derive(Debug, Parser)]
@@ -76,12 +76,25 @@ enum Command {
         #[arg(long)]
         to: String,
     },
-    Ingest {
-        #[arg(long, default_value = "codex")]
-        provider: String,
-        #[arg(long)]
-        sessions_dir: Option<String>,
-    },
+    #[command(visible_alias = "ingest")]
+    Sync(SyncArgs),
+}
+
+#[derive(Debug, Args)]
+struct SyncArgs {
+    /// Provider to synchronize: codex, claude_code, opencode, or copilot.
+    #[arg(value_name = "PROVIDER")]
+    provider: Option<String>,
+    /// Compatibility form of the provider argument.
+    #[arg(
+        long = "provider",
+        value_name = "PROVIDER",
+        conflicts_with = "provider"
+    )]
+    provider_flag: Option<String>,
+    /// Alternate source directory for providers that read session files.
+    #[arg(long)]
+    sessions_dir: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -235,10 +248,13 @@ fn main() -> Result<()> {
             print_report(&report_for_period(&provider, start, end, backend)?);
             Ok(())
         }
-        Some(Command::Ingest {
-            provider,
-            sessions_dir,
-        }) => run_ingest(&provider, sessions_dir.as_deref()),
+        Some(Command::Sync(args)) => {
+            let provider = args
+                .provider_flag
+                .or(args.provider)
+                .unwrap_or_else(|| "codex".to_owned());
+            run_sync(&provider, args.sessions_dir.as_deref())
+        }
     }
 }
 
@@ -320,14 +336,14 @@ fn prepare_report_backend(provider: &str) -> Result<storage::BackendMode> {
     Ok(backend)
 }
 
-fn run_ingest(provider: &str, sessions_dir: Option<&str>) -> Result<()> {
+fn run_sync(provider: &str, sessions_dir: Option<&str>) -> Result<()> {
     validate_provider(provider)?;
     let backend = prepare_report_backend(provider)?;
     let mut store = storage::Backend::open_for_agent(backend, provider)?;
     let (files_scanned, files_with_usage, token_records, malformed_lines) =
         ingest_provider(provider, sessions_dir, &mut store)?;
     eprintln!(
-        "[agentusage] ingested provider={provider} files_scanned={files_scanned} files_with_usage={files_with_usage} token_records={token_records} malformed_lines={malformed_lines}"
+        "[agentusage] synced provider={provider} files_scanned={files_scanned} files_with_usage={files_with_usage} token_records={token_records} malformed_lines={malformed_lines}"
     );
     Ok(())
 }

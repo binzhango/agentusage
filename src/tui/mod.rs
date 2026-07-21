@@ -128,18 +128,24 @@ pub fn run() -> Result<()> {
     }
 
     // Codex keeps the existing interactive initialization behavior. Other
-    // providers are discovered without prompting and appear unavailable until
-    // their storage has been initialized.
+    // providers are discovered without prompting; an uninitialized provider
+    // should not prevent the dashboard from opening for the providers that do
+    // have usage storage.
     let config = crate::config::load()?;
     let codex_backend = crate::prepare_report_backend("codex")?;
     let mut backends = Vec::new();
     for provider in PROVIDERS {
         let backend = if provider == "codex" {
-            codex_backend
+            Ok(codex_backend)
         } else {
-            crate::storage::prepare_backend_for_agent(false, provider)?
+            crate::storage::prepare_backend_for_agent(false, provider)
         };
-        backends.push((provider.to_owned(), backend));
+        match backend {
+            Ok(backend) => backends.push((provider.to_owned(), backend)),
+            Err(error) => eprintln!(
+                "[agentusage] skipping provider={provider}: storage unavailable ({error})"
+            ),
+        }
     }
 
     enable_raw_mode().context("enable terminal raw mode")?;
@@ -462,7 +468,7 @@ impl Dashboard {
             inner_width,
         ));
         lines.push(Line::from(format!(
-            "{} tok · {}% cached",
+            "Total tokens {}  ·  Cache rate {:.1}%",
             compact(provider.total_tokens),
             cache_rate(provider).unwrap_or(0.0)
         )));
@@ -472,32 +478,54 @@ impl Dashboard {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
+            let widths = [3, 28, 9, 16, 12];
+            lines.push(table_border(&widths, '┌', '┬', '┐'));
+            lines.push(table_row(
+                &["#", "model", "share", "tokens", "cost"].map(str::to_owned),
+                &widths,
+                &[true, false, true, true, true],
+            ));
+            lines.push(table_border(&widths, '├', '┼', '┤'));
             for (rank, (model, tokens, cost)) in provider.models.iter().take(8).enumerate() {
                 let share = if provider.total_tokens > 0 {
                     *tokens as f64 / provider.total_tokens as f64 * 100.0
                 } else {
                     0.0
                 };
-                lines.push(Line::from(format!(
-                    "{:>2}  {:<24} {:>6.1}% {:>10} tok  ${:>9.5}",
-                    rank + 1,
-                    truncate(model, 24),
-                    share,
-                    compact(*tokens),
-                    cost
-                )));
+                lines.push(table_row(
+                    &[
+                        (rank + 1).to_string(),
+                        truncate(model, 28),
+                        format!("{share:.1}%"),
+                        format!("{} tok", compact(*tokens)),
+                        format!("${cost:.5}"),
+                    ],
+                    &widths,
+                    &[true, false, true, true, true],
+                ));
             }
-            lines.push(Line::from(
-                "    Token Breakdown       input      output     cache.r      reason       total",
+            lines.push(table_border(&widths, '└', '┴', '┘'));
+            lines.push(Line::from("Token Breakdown"));
+            let token_widths = [14, 14, 16, 14, 14];
+            lines.push(table_border(&token_widths, '┌', '┬', '┐'));
+            lines.push(table_row(
+                &["input", "output", "cache read", "reasoning", "total"].map(str::to_owned),
+                &token_widths,
+                &[false, false, false, false, false],
             ));
-            lines.push(Line::from(format!(
-                "                         {:>10} {:>10} {:>10} {:>10} {:>11}",
-                compact(provider.input_tokens),
-                compact(provider.output_tokens),
-                compact(provider.cache_read_tokens),
-                compact(provider.reasoning_tokens),
-                compact(provider.total_tokens)
-            )));
+            lines.push(table_border(&token_widths, '├', '┼', '┤'));
+            lines.push(table_row(
+                &[
+                    compact(provider.input_tokens),
+                    compact(provider.output_tokens),
+                    compact(provider.cache_read_tokens),
+                    compact(provider.reasoning_tokens),
+                    compact(provider.total_tokens),
+                ],
+                &token_widths,
+                &[true, true, true, true, true],
+            ));
+            lines.push(table_border(&token_widths, '└', '┴', '┘'));
         }
         lines.push(Line::from(""));
         lines.push(section_line(
@@ -511,14 +539,27 @@ impl Dashboard {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            for (rank, (client, tokens, _)) in provider.clients.iter().take(8).enumerate() {
-                lines.push(Line::from(format!(
-                    "{:>2}  {:<30} {:>10} tok",
-                    rank + 1,
-                    truncate(client, 30),
-                    compact(*tokens)
-                )));
+            let widths = [3, 32, 16, 12];
+            lines.push(table_border(&widths, '┌', '┬', '┐'));
+            lines.push(table_row(
+                &["#", "client", "tokens", "cost"].map(str::to_owned),
+                &widths,
+                &[true, false, true, true],
+            ));
+            lines.push(table_border(&widths, '├', '┼', '┤'));
+            for (rank, (client, tokens, cost)) in provider.clients.iter().take(8).enumerate() {
+                lines.push(table_row(
+                    &[
+                        (rank + 1).to_string(),
+                        truncate(client, 32),
+                        format!("{} tok", compact(*tokens)),
+                        format!("${cost:.5}"),
+                    ],
+                    &widths,
+                    &[true, false, true, true],
+                ));
             }
+            lines.push(table_border(&widths, '└', '┴', '┘'));
         }
         lines.push(Line::from(""));
         lines.push(section_line(
@@ -532,15 +573,27 @@ impl Dashboard {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
+            let widths = [3, 32, 16, 12];
+            lines.push(table_border(&widths, '┌', '┬', '┐'));
+            lines.push(table_row(
+                &["#", "project", "tokens", "cost"].map(str::to_owned),
+                &widths,
+                &[true, false, true, true],
+            ));
+            lines.push(table_border(&widths, '├', '┼', '┤'));
             for (rank, (project, tokens, cost)) in provider.projects.iter().take(10).enumerate() {
-                lines.push(Line::from(format!(
-                    "{:>2}  {:<30} {:>10} tok  ${:>9.5}",
-                    rank + 1,
-                    truncate(project, 30),
-                    compact(*tokens),
-                    cost
-                )));
+                lines.push(table_row(
+                    &[
+                        (rank + 1).to_string(),
+                        truncate(project, 32),
+                        format!("{} tok", compact(*tokens)),
+                        format!("${cost:.5}"),
+                    ],
+                    &widths,
+                    &[true, false, true, true],
+                ));
             }
+            lines.push(table_border(&widths, '└', '┴', '┘'));
         }
         lines.push(Line::from(""));
         lines.push(section_line("🔧 Tool Usage", Color::Yellow, inner_width));
@@ -550,14 +603,26 @@ impl Dashboard {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
+            let widths = [3, 32, 14];
+            lines.push(table_border(&widths, '┌', '┬', '┐'));
+            lines.push(table_row(
+                &["#", "tool", "calls"].map(str::to_owned),
+                &widths,
+                &[true, false, true],
+            ));
+            lines.push(table_border(&widths, '├', '┼', '┤'));
             for (rank, (tool, calls)) in provider.tools.iter().take(10).enumerate() {
-                lines.push(Line::from(format!(
-                    "{:>2}  {:<30} {:>8} calls",
-                    rank + 1,
-                    truncate(tool, 30),
-                    calls
-                )));
+                lines.push(table_row(
+                    &[
+                        (rank + 1).to_string(),
+                        truncate(tool, 32),
+                        format!("{calls} calls"),
+                    ],
+                    &widths,
+                    &[true, false, true],
+                ));
             }
+            lines.push(table_border(&widths, '└', '┴', '┘'));
         }
         lines.push(Line::from(""));
         lines.push(section_line(
@@ -572,15 +637,27 @@ impl Dashboard {
             )));
         } else {
             let total: usize = provider.languages.iter().map(|(_, count)| *count).sum();
+            let widths = [22, 9, 12];
+            lines.push(table_border(&widths, '┌', '┬', '┐'));
+            lines.push(table_row(
+                &["language", "share", "requests"].map(str::to_owned),
+                &widths,
+                &[false, true, true],
+            ));
+            lines.push(table_border(&widths, '├', '┼', '┤'));
             for (language, count) in provider.languages.iter().take(10) {
                 let share = (*count as f64 / total.max(1) as f64) * 100.0;
-                lines.push(Line::from(format!(
-                    "  {:<20} {:>5.1}% {:>6} req",
-                    truncate(language, 20),
-                    share,
-                    count
-                )));
+                lines.push(table_row(
+                    &[
+                        truncate(language, 22),
+                        format!("{share:.1}%"),
+                        format!("{count} req"),
+                    ],
+                    &widths,
+                    &[false, true, true],
+                ));
             }
+            lines.push(table_border(&widths, '└', '┴', '┘'));
         }
         lines.push(Line::from(""));
         lines.push(section_line("Other Data", Color::DarkGray, inner_width));
@@ -1196,6 +1273,34 @@ fn section_line(title: &str, color: Color, width: u16) -> Line<'static> {
         format!("{title} {}", "─".repeat(fill)),
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     ))
+}
+
+fn table_border(widths: &[usize], left: char, separator: char, right: char) -> Line<'static> {
+    let mut value = left.to_string();
+    for (index, width) in widths.iter().enumerate() {
+        value.push_str(&"─".repeat(*width + 2));
+        value.push(if index + 1 == widths.len() {
+            right
+        } else {
+            separator
+        });
+    }
+    Line::from(Span::styled(value, Style::default().fg(Color::DarkGray)))
+}
+
+fn table_row(cells: &[String], widths: &[usize], right_aligned: &[bool]) -> Line<'static> {
+    let mut value = String::from("│");
+    for ((cell, width), right_align) in cells.iter().zip(widths).zip(right_aligned) {
+        let cell = if *right_align {
+            format!("{cell:>width$}")
+        } else {
+            format!("{cell:<width$}")
+        };
+        value.push(' ');
+        value.push_str(&cell);
+        value.push_str(" │");
+    }
+    Line::from(value)
 }
 
 fn aligned_header(left: &str, right: &str, width: u16) -> String {
