@@ -164,19 +164,15 @@ data into the selected database when needed.
 
 ## Reports
 
-Detailed reports are available under `agentusage command`. The original period
-commands remain supported as compatibility aliases. All report commands accept
-`--provider`.
+Detailed reports are available directly through the period commands. All report
+commands accept `--provider`.
 
 ```bash
 # Today
-agentusage command daily --provider codex
-agentusage command daily --provider claude_code
-agentusage command daily --provider opencode
-agentusage command daily --provider copilot
-
-# Compatibility alias
 agentusage daily --provider codex
+agentusage daily --provider claude_code
+agentusage daily --provider opencode
+agentusage daily --provider copilot
 
 # Specific date
 agentusage daily --provider codex --date 2026-07-19
@@ -323,8 +319,6 @@ agentusage telemetry daemon --db-path /path/to/telemetry.db
 agentusage --help
 agentusage dashboard --help
 agentusage server --help
-agentusage command --help
-agentusage command daily --help
 agentusage daily --help
 agentusage weekly --help
 agentusage monthly --help
