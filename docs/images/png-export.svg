@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">Download a provider card as PNG</title>
+  <desc id="desc">A provider usage card is exported to a high-resolution PNG file directly in the browser.</desc>
+  <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M0 0 L12 6 L0 12 Z" fill="#e9b4c9"/></marker></defs>
+  <rect width="1200" height="560" rx="18" fill="#181923"/>
+  <rect x="38" y="35" width="610" height="490" rx="10" fill="#1e1f2b" stroke="#555568" stroke-width="2"/>
+  <g font-family="ui-monospace, monospace">
+    <text x="66" y="84" fill="#e9b4c9" font-size="24" font-weight="700">codex</text>
+    <rect x="495" y="57" width="126" height="38" rx="5" fill="#292a3a" stroke="#e9b4c9"/><text x="558" y="82" fill="#e9b4c9" font-size="15" text-anchor="middle">Download PNG</text>
+    <text x="66" y="117" fill="#b9b9c8" font-size="15">Window: 7d</text>
+    <g font-size="18"><text x="66" y="160" fill="#ddd">tokens</text><text x="620" y="160" fill="#fff" text-anchor="end" font-weight="700">4,821,360</text><text x="66" y="200" fill="#ddd">requests</text><text x="620" y="200" fill="#fff" text-anchor="end" font-weight="700">247</text><text x="66" y="240" fill="#ddd">sessions</text><text x="620" y="240" fill="#fff" text-anchor="end" font-weight="700">29</text><text x="66" y="280" fill="#ddd">cost</text><text x="620" y="280" fill="#fff" text-anchor="end" font-weight="700">$8.154920</text></g>
+    <g stroke="#38394a"><line x1="66" y1="174" x2="620" y2="174"/><line x1="66" y1="214" x2="620" y2="214"/><line x1="66" y1="254" x2="620" y2="254"/><line x1="66" y1="294" x2="620" y2="294"/></g>
+    <text x="66" y="335" fill="#d9a7c0" font-size="19" font-weight="700">Token usage trend</text>
+    <g stroke="#363746"><line x1="78" y1="370" x2="608" y2="370"/><line x1="78" y1="423" x2="608" y2="423"/><line x1="78" y1="476" x2="608" y2="476"/></g>
+    <path d="M82 459 L168 428 L254 441 L340 382 L426 405 L512 352 L598 373" fill="none" stroke="#e9b4c9" stroke-width="4" stroke-linecap="round"/>
+    <path d="M82 474 L168 458 L254 464 L340 432 L426 444 L512 409 L598 421" fill="none" stroke="#8ed1c5" stroke-width="2.5"/>
+  </g>
+  <path d="M690 278 C740 278 768 278 813 278" fill="none" stroke="#e9b4c9" stroke-width="5" marker-end="url(#arrow)"/>
+  <g transform="translate(844 86)" font-family="ui-monospace, monospace">
+    <rect width="310" height="388" rx="14" fill="#f4f1f3"/>
+    <path d="M226 0 L310 84 L226 84 Z" fill="#dfd8de"/>
+    <rect x="32" y="45" width="118" height="50" rx="7" fill="#e9b4c9"/><text x="91" y="78" fill="#3b2430" font-size="22" font-weight="700" text-anchor="middle">PNG</text>
+    <rect x="32" y="132" width="246" height="176" rx="8" fill="#1e1f2b" stroke="#555568"/>
+    <text x="50" y="163" fill="#e9b4c9" font-size="15" font-weight="700">codex · 7d</text>
+    <text x="50" y="197" fill="#ddd" font-size="12">tokens</text><text x="260" y="197" fill="#fff" font-size="12" text-anchor="end">4,821,360</text>
+    <path d="M50 270 L84 256 L118 261 L152 230 L186 244 L220 215 L260 224" fill="none" stroke="#e9b4c9" stroke-width="3"/>
+    <text x="155" y="346" fill="#342b31" font-size="14" text-anchor="middle">agentusage-codex-7d.png</text>
+    <text x="155" y="368" fill="#776c73" font-size="12" text-anchor="middle">2× resolution · local export</text>
+  </g>
+</svg>
