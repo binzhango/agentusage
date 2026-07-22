@@ -123,6 +123,7 @@ pub fn agent_db_path(agent: &str) -> Result<PathBuf> {
         "claude" | "claude_code" => "claude_code",
         "opencode" | "open_code" => "opencode",
         "copilot" => "copilot",
+        "pi" => "pi",
         _ => "codex",
     };
     Ok(default_state_dir()?.join(format!("{name}.db")))

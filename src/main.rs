@@ -78,7 +78,7 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct SyncArgs {
-    /// Provider to synchronize: codex, claude_code, opencode, or copilot.
+    /// Provider to synchronize: codex, claude_code, opencode, copilot, or pi.
     #[arg(value_name = "PROVIDER")]
     provider: Option<String>,
     /// Compatibility form of the provider argument.
@@ -277,6 +277,15 @@ fn ingest_provider(
                 stats.malformed_lines,
             )
         }
+        "pi" => {
+            let stats = providers::pi::ingest_into_store(sessions_dir, store)?;
+            (
+                stats.files_scanned,
+                stats.files_with_usage,
+                stats.token_records,
+                stats.malformed_lines,
+            )
+        }
         _ => unreachable!(),
     };
     Ok((
@@ -421,10 +430,10 @@ fn local_midnight_utc(date: NaiveDate) -> chrono::DateTime<Utc> {
 
 fn validate_provider(provider: &str) -> Result<()> {
     match provider {
-        "codex" | "claude" | "claude_code" | "opencode" | "open_code" | "copilot" => Ok(()),
+        "codex" | "claude" | "claude_code" | "opencode" | "open_code" | "copilot" | "pi" => Ok(()),
         other => {
             anyhow::bail!(
-                "unsupported provider {other:?}; supported: codex, claude_code, opencode, copilot"
+                "unsupported provider {other:?}; supported: codex, claude_code, opencode, copilot, pi"
             )
         }
     }
@@ -435,7 +444,18 @@ fn agent_name_for_report(provider: &str) -> &str {
         "claude" | "claude_code" => "claude_code",
         "opencode" | "open_code" => "opencode",
         "copilot" => "copilot",
+        "pi" => "pi",
         _ => "codex",
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::agent_name_for_report;
+
+    #[test]
+    fn pi_reports_query_pi_events() {
+        assert_eq!(agent_name_for_report("pi"), "pi");
     }
 }
 

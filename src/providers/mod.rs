@@ -6,6 +6,7 @@ use crate::telemetry::{self, EventStatus, EventType, IngestRequest};
 pub mod codex;
 pub mod copilot;
 pub mod local;
+pub mod pi;
 
 /// Dispatches the three first-class hook adapters while keeping their common
 /// envelope normalization in the telemetry layer.

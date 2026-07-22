@@ -21,7 +21,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 
-const PROVIDERS: [&str; 4] = ["codex", "claude_code", "opencode", "copilot"];
+const PROVIDERS: [&str; 5] = ["codex", "claude_code", "opencode", "copilot", "pi"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Window {

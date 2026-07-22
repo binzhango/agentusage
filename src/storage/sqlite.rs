@@ -71,7 +71,7 @@ impl SqliteStore {
         summary.lines_added = totals.13;
         summary.lines_removed = totals.14;
 
-        for dimension in ["model", "client", "project"] {
+        for dimension in ["model", "provider_id", "client", "project"] {
             let (dimension_expr, from_sql, filter_sql) = if dimension == "project" {
                 (
                     "COALESCE(e.project, json_extract(raw.payload, '$.payload.cwd'), json_extract(raw.payload, '$.cwd'))",
@@ -111,6 +111,9 @@ impl SqliteStore {
                 match dimension {
                     "model" => {
                         summary.models.insert(name, bucket);
+                    }
+                    "provider_id" => {
+                        summary.providers.insert(name, bucket);
                     }
                     "client" => {
                         summary.clients.insert(name, bucket);

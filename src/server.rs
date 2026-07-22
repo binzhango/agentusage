@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::{collections::BTreeMap, process::Command, thread};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-const PROVIDERS: [&str; 4] = ["codex", "claude_code", "opencode", "copilot"];
+const PROVIDERS: [&str; 5] = ["codex", "claude_code", "opencode", "copilot", "pi"];
 
 #[derive(Debug, Serialize)]
 struct ProviderStatus {

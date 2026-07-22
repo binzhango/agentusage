@@ -146,7 +146,7 @@ impl UsageStore for PostgresStore {
                 },
             );
         }
-        for dimension in ["model", "client"] {
+        for dimension in ["model", "provider_id", "client"] {
             let rows = self.client.query(
                 &format!(
                     "SELECT {dimension}, COALESCE(SUM(requests),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(reasoning_tokens),0), COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(ai_units_nano),0), COALESCE(SUM(request_multiplier),0), COALESCE(SUM(ai_credits),0) FROM agentusage_usage_events WHERE occurred_at >= $1 AND occurred_at < $2 AND ($3::text IS NULL OR agent_name = $3) AND {dimension} IS NOT NULL AND {dimension} <> '' GROUP BY {dimension}"
@@ -158,6 +158,8 @@ impl UsageStore for PostgresStore {
                 let bucket = bucket_from_row(&row);
                 if dimension == "model" {
                     summary.models.insert(name, bucket);
+                } else if dimension == "provider_id" {
+                    summary.providers.insert(name, bucket);
                 } else {
                     summary.clients.insert(name, bucket);
                 }

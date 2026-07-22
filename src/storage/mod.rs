@@ -112,6 +112,7 @@ pub struct UsageSummary {
     pub lines_added: i64,
     pub lines_removed: i64,
     pub models: BTreeMap<String, UsageBucket>,
+    pub providers: BTreeMap<String, UsageBucket>,
     pub clients: BTreeMap<String, UsageBucket>,
     pub projects: BTreeMap<String, UsageBucket>,
     pub tools: BTreeMap<String, i64>,
@@ -435,6 +436,15 @@ pub fn add_event(summary: &mut UsageSummary, event: &UsageEvent) {
     };
     if let Some(model) = &event.model {
         add_bucket(summary.models.entry(model.clone()).or_default(), &bucket);
+    }
+    if !event.provider_id.is_empty() {
+        add_bucket(
+            summary
+                .providers
+                .entry(event.provider_id.clone())
+                .or_default(),
+            &bucket,
+        );
     }
     if let Some(client) = &event.client {
         add_bucket(summary.clients.entry(client.clone()).or_default(), &bucket);

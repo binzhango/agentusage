@@ -7,7 +7,7 @@
 **A local, open-source usage dashboard for AI coding agents.**
 
 Agentusage turns the history already written by Codex, Claude Code, OpenCode,
-and GitHub Copilot into a private usage dashboard, JSON API, terminal UI, and
+Pi, and GitHub Copilot into a private usage dashboard, JSON API, terminal UI, and
 CLI reports. Compare model activity over time, inspect token and cache usage,
 track estimated cost, and understand which tools are consuming your AI budget.
 
@@ -49,8 +49,16 @@ Synchronize the providers you use, then launch the browser dashboard:
 au sync codex
 au sync claude_code
 au sync copilot
+au sync pi
 au server --open
 ```
+
+Pi sessions are read from `~/.pi/agent/sessions/` by default. Set
+`PI_CODING_AGENT_SESSION_DIR` or pass `--sessions-dir` to use another session
+directory. Pi is shown as one agent card; usage from its different model
+providers remains attached to the normalized event and raw JSONL record. The
+dashboard identifies Pi models as `provider:model`, for example
+`openai-codex:gpt-5.6-luna`, and shows a provider-level breakdown for Pi.
 
 Open [http://127.0.0.1:8787](http://127.0.0.1:8787) if the browser does not
 open automatically. The default bind address is local-only; use `--host` and
@@ -66,6 +74,31 @@ run `agentusage sync opencode` after selecting a database backend
 
 Run the suggested `au sync <provider>` command to initialize it, or ignore the
 message when you do not use that provider.
+
+### Pi coding agent
+
+[Pi](https://pi.dev/) is a minimal terminal coding agent with a unified
+multi-provider model interface. Agentusage reads Pi's append-only JSONL session
+files and imports prompts, assistant requests, input/output tokens, cache
+tokens, reported cost, models, projects, and tool calls.
+
+Pi usage is aggregated under the `pi` agent card even when a session switches
+between providers. Provider and model combinations are displayed explicitly,
+such as `openai-codex:gpt-5.6-luna`. Pi's reported cost is preserved as an
+estimate; subscription usage is not treated as a direct invoice.
+
+```bash
+au sync pi
+au daily --provider pi
+```
+
+By default, Pi sessions are discovered recursively below
+`~/.pi/agent/sessions/`. For a custom Pi session directory, use either:
+
+```bash
+PI_CODING_AGENT_SESSION_DIR=/path/to/sessions au sync pi
+au sync pi --sessions-dir /path/to/sessions
+```
 
 ## Explore usage in the browser
 
@@ -163,12 +196,13 @@ curl 'http://127.0.0.1:8787/api/providers'
   { "name": "codex", "available": true },
   { "name": "claude_code", "available": true },
   { "name": "opencode", "available": false },
-  { "name": "copilot", "available": true }
+  { "name": "copilot", "available": true },
+  { "name": "pi", "available": true }
 ]
 ```
 
 The provider list is currently fixed to `codex`, `claude_code`, `opencode`,
-and `copilot`.
+`copilot`, and `pi`.
 
 ### `GET /api/summary`
 
@@ -176,7 +210,7 @@ Returns one aggregate usage object for a provider and time window.
 
 | Query parameter | Required | Default | Accepted values |
 | --- | --- | --- | --- |
-| `provider` | No | `codex` | `codex`, `claude_code`, `opencode`, `copilot` |
+| `provider` | No | `codex` | `codex`, `claude_code`, `opencode`, `copilot`, `pi` |
 | `window` | No | `today` | `today`, `7d`, `30d`, `all` |
 
 Compatibility aliases are also accepted: `claude` for `claude_code`,
