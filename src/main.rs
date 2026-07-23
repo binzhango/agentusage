@@ -35,6 +35,8 @@ enum Command {
         port: u16,
         #[arg(long)]
         open: bool,
+        #[arg(long, help = "Enable timestamped request and backend logging")]
+        verbose: bool,
     },
     Telemetry {
         #[command(subcommand)]
@@ -122,7 +124,12 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::Dashboard) => tui::run(),
-        Some(Command::Server { host, port, open }) => server::run(&host, port, open),
+        Some(Command::Server {
+            host,
+            port,
+            open,
+            verbose,
+        }) => server::run(&host, port, open, verbose),
         Some(Command::Telemetry { command }) => match command {
             TelemetryCommand::Hook {
                 source,

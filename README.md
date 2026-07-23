@@ -21,7 +21,8 @@ is available when you intentionally configure a shared database.
 ## What you get
 
 - An interactive browser dashboard served by a single `au server` process.
-- One-click PNG downloads of individual provider cards for sharing or archiving.
+- Persistent light and dark themes with automatic system-theme detection.
+- One-click SVG downloads of individual provider cards for sharing or archiving.
 - Daily token trend charts with a distinct colored line for every model.
 - Today, 7-day, 30-day, and all-time views.
 - Input, output, reasoning, cache-read, cache-write, and total-token metrics.
@@ -120,20 +121,23 @@ For every available provider, the page presents:
 - hover details containing the model, date, and exact token count;
 - a model table covering input, output, cache-read, cache-write, and total
   tokens;
-- a `Download PNG` action that exports the complete provider card as an image;
+- a `Download SVG` action that exports the complete provider card as an image;
+- a theme toggle that switches the dashboard and exported cards between light
+  and dark palettes;
 - responsive loading, empty, unavailable, and error states.
 
 The range buttons switch between `Today`, `7 Days`, `30 Days`, and `All Time`.
 All-time summary cards use the complete history, while the all-time trend chart
 shows the latest 90 days to remain readable and quick to load.
 
-To save a card, select the desired range and click `Download PNG` in that
+To save a card, select the desired range and click `Download SVG` in that
 provider's card. The image includes the summary metrics, usage chart, legend,
-and model table shown on screen. Rendering and download happen locally in the
-browser; no dashboard data is uploaded to an external image service. Files use
-names such as `agentusage-codex-7d.png`.
+and model table shown on screen. SVG is generated and downloaded directly in
+the browser with no canvas, external library, or image service involved. Files
+use names such as `agentusage-codex-7d.svg` and can be opened by browsers,
+Preview, Figma, or most design tools.
 
-![A provider usage card being downloaded as a high-resolution PNG](docs/images/png-export.svg)
+![A provider usage card being downloaded as a standalone SVG image](docs/images/png-export.svg)
 
 ## HTTP server and API reference
 
@@ -150,12 +154,24 @@ Server options:
 | `--host <HOST>` | `127.0.0.1` | Address on which the HTTP server listens |
 | `--port <PORT>` | `8787` | TCP port on which the HTTP server listens |
 | `--open` | disabled | Open the dashboard in the system browser after startup |
+| `--verbose` | disabled | Print timestamped request, backend, query, and timing details |
 
 For example:
 
 ```bash
 au server --host 127.0.0.1 --port 9000 --open
 ```
+
+For detailed troubleshooting logs, start the server with `--verbose`:
+
+```bash
+au server --verbose
+```
+
+Verbose mode reports timestamped request paths, provider and time-window
+queries, backend type and read-only database opens, aggregated trend days,
+background ingestion, and request timing. Normal server output stays concise
+and does not print storage paths.
 
 The default base URL is `http://127.0.0.1:8787`. All currently supported
 routes use `GET`:

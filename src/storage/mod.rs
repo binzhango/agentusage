@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -120,6 +120,16 @@ pub struct UsageSummary {
     pub primary_used_percent: Option<f64>,
     pub primary_window_minutes: Option<i64>,
     pub primary_resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DailyUsagePoint {
+    pub date: NaiveDate,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub total_tokens: i64,
+    pub models: BTreeMap<String, i64>,
 }
 
 /// Extract quota from one provider payload. The caller is responsible for
@@ -263,6 +273,18 @@ impl Backend {
             Self::Postgres(store) => store.summary_for_agent(Some(agent_name), from, to),
         }
     }
+
+    pub fn daily_trend_for_agent(
+        &mut self,
+        agent_name: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<DailyUsagePoint>> {
+        match self {
+            Self::Sqlite(store) => store.daily_trend_for_agent(agent_name, from, to),
+            Self::Postgres(store) => store.daily_trend_for_agent(agent_name, from, to),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,19 +301,8 @@ pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<Backe
     let sqlite_path = crate::config::agent_db_path(agent)?;
     if sqlite_path.exists() {
         match sqlite::SqliteStore::open(&sqlite_path) {
-            Ok(_) => {
-                eprintln!(
-                    "[agentusage] storage backend=sqlite path={}",
-                    sqlite_path.display()
-                );
-                return Ok(BackendMode::Sqlite);
-            }
-            Err(error) => {
-                eprintln!(
-                    "[agentusage] SQLite database exists but could not be opened path={} error={error:#}",
-                    sqlite_path.display()
-                );
-            }
+            Ok(_) => return Ok(BackendMode::Sqlite),
+            Err(_) => {}
         }
     }
     let postgres_url = env::var("AGENTUSAGE_POSTGRES_URL")
@@ -300,7 +311,6 @@ pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<Backe
     if let Some(url) = postgres_url.as_deref()
         && postgres::PostgresStore::connect(url).is_ok()
     {
-        eprintln!("[agentusage] storage backend=postgres status=connected");
         return Ok(BackendMode::Postgres);
     }
     if !interactive || !io::stdin().is_terminal() {
@@ -320,15 +330,12 @@ pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<Backe
     match answer.trim().to_ascii_lowercase().as_str() {
         "s" | "sqlite" => {
             sqlite::SqliteStore::open(&sqlite_path)?;
-            eprintln!(
-                "[agentusage] storage backend=sqlite initialized path={}",
-                sqlite_path.display()
-            );
+            eprintln!("Storage initialized · provider={agent} · backend=SQLite");
             Ok(BackendMode::Sqlite)
         }
         "p" | "postgres" if postgres_url.is_some() => {
             postgres::PostgresStore::connect(postgres_url.as_deref().unwrap())?;
-            eprintln!("[agentusage] storage backend=postgres initialized");
+            eprintln!("Storage initialized · provider={agent} · backend=PostgreSQL");
             Ok(BackendMode::Postgres)
         }
         _ => anyhow::bail!("no storage backend selected; choose SQLite or PostgreSQL"),
