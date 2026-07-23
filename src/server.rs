@@ -94,6 +94,7 @@ fn handle_request(request: Request, verbose: bool) -> Result<()> {
     let result = (|| -> Result<()> {
         match (request.method(), path.as_str()) {
             (&Method::Get, "/") => respond_html(request),
+            (&Method::Get, path) if path.starts_with("/provider/") => respond_html(request),
             (&Method::Get, "/api/providers") => respond_json(request, providers(verbose)),
             (&Method::Get, "/api/summary") => {
                 let query = url.split_once('?').map(|(_, value)| value).unwrap_or("");
