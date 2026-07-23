@@ -6,6 +6,17 @@ The release workflow updates this file automatically when `main` is released.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-23
+
+- Merge pull request #12 from binzhango/feature_pi_agent (160a43f)
+- Fix clippy backend selection warning (77e6c66)
+- Polish dashboard exports and server observability (510bc19)
+- Document Pi agent integration (622f188)
+- Auto-migrate legacy Pi usage database (9948a3f)
+- Fix clippy test module ordering (7a15d80)
+- Add Pi coding agent usage ingestion (bcd838a)
+
+
 ## [1.1.0] - 2026-07-21
 
 - Merge pull request #11 from binzhango/feature_choose-interactive-metrics-framework (eaff361)
