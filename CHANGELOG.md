@@ -6,6 +6,13 @@ The release workflow updates this file automatically when `main` is released.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-23
+
+- Merge pull request #13 from binzhango/feature_browser (5ece9e8)
+- Restructure project documentation (16a218b)
+- Polish dashboard controls and chart tooltips (4e49a72)
+
+
 ## [1.2.0] - 2026-07-23
 
 - Merge pull request #12 from binzhango/feature_pi_agent (160a43f)
