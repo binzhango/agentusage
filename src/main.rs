@@ -449,16 +449,6 @@ fn agent_name_for_report(provider: &str) -> &str {
     }
 }
 
-#[cfg(test)]
-mod provider_tests {
-    use super::agent_name_for_report;
-
-    #[test]
-    fn pi_reports_query_pi_events() {
-        assert_eq!(agent_name_for_report("pi"), "pi");
-    }
-}
-
 fn cache_hit_rate(report: &providers::codex::DailyUsage) -> Option<f64> {
     let denominator = report.input_tokens + report.cached_input_tokens + report.cache_write_tokens;
     (denominator > 0 && report.cached_input_tokens > 0)
@@ -588,4 +578,14 @@ fn sync_provider_after_hook(source: &str) -> Result<()> {
     let mut store = storage::Backend::open_for_agent(backend, provider)?;
     let _ = ingest_provider(provider, None, &mut store)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::agent_name_for_report;
+
+    #[test]
+    fn pi_reports_query_pi_events() {
+        assert_eq!(agent_name_for_report("pi"), "pi");
+    }
 }
