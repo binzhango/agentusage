@@ -35,6 +35,8 @@ enum Command {
         port: u16,
         #[arg(long)]
         open: bool,
+        #[arg(long, help = "Enable timestamped request and backend logging")]
+        verbose: bool,
     },
     Telemetry {
         #[command(subcommand)]
@@ -78,7 +80,7 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct SyncArgs {
-    /// Provider to synchronize: codex, claude_code, opencode, or copilot.
+    /// Provider to synchronize: codex, claude_code, opencode, copilot, or pi.
     #[arg(value_name = "PROVIDER")]
     provider: Option<String>,
     /// Compatibility form of the provider argument.
@@ -122,7 +124,12 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::Dashboard) => tui::run(),
-        Some(Command::Server { host, port, open }) => server::run(&host, port, open),
+        Some(Command::Server {
+            host,
+            port,
+            open,
+            verbose,
+        }) => server::run(&host, port, open, verbose),
         Some(Command::Telemetry { command }) => match command {
             TelemetryCommand::Hook {
                 source,
@@ -227,6 +234,9 @@ fn parse_date_or_today(value: Option<&str>) -> Result<NaiveDate> {
 }
 
 fn prepare_report_backend(provider: &str) -> Result<storage::BackendMode> {
+    if provider == "pi" {
+        let _ = config::migrate_pi_database()?;
+    }
     let backend = storage::prepare_backend_for_agent(true, provider)?;
     Ok(backend)
 }
@@ -270,6 +280,15 @@ fn ingest_provider(
         )?,
         "copilot" => {
             let stats = providers::copilot::ingest_into_store(None, store)?;
+            (
+                stats.files_scanned,
+                stats.files_with_usage,
+                stats.token_records,
+                stats.malformed_lines,
+            )
+        }
+        "pi" => {
+            let stats = providers::pi::ingest_into_store(sessions_dir, store)?;
             (
                 stats.files_scanned,
                 stats.files_with_usage,
@@ -421,10 +440,10 @@ fn local_midnight_utc(date: NaiveDate) -> chrono::DateTime<Utc> {
 
 fn validate_provider(provider: &str) -> Result<()> {
     match provider {
-        "codex" | "claude" | "claude_code" | "opencode" | "open_code" | "copilot" => Ok(()),
+        "codex" | "claude" | "claude_code" | "opencode" | "open_code" | "copilot" | "pi" => Ok(()),
         other => {
             anyhow::bail!(
-                "unsupported provider {other:?}; supported: codex, claude_code, opencode, copilot"
+                "unsupported provider {other:?}; supported: codex, claude_code, opencode, copilot, pi"
             )
         }
     }
@@ -435,6 +454,7 @@ fn agent_name_for_report(provider: &str) -> &str {
         "claude" | "claude_code" => "claude_code",
         "opencode" | "open_code" => "opencode",
         "copilot" => "copilot",
+        "pi" => "pi",
         _ => "codex",
     }
 }
@@ -568,4 +588,14 @@ fn sync_provider_after_hook(source: &str) -> Result<()> {
     let mut store = storage::Backend::open_for_agent(backend, provider)?;
     let _ = ingest_provider(provider, None, &mut store)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::agent_name_for_report;
+
+    #[test]
+    fn pi_reports_query_pi_events() {
+        assert_eq!(agent_name_for_report("pi"), "pi");
+    }
 }

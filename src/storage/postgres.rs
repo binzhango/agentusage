@@ -1,10 +1,11 @@
 use super::{
-    FileCursor, IngestRecord, RawEvent, UsageBucket, UsageEvent, UsageMetric, UsageStore,
-    UsageSummary, add_event,
+    DailyUsagePoint, FileCursor, IngestRecord, RawEvent, UsageBucket, UsageEvent, UsageMetric,
+    UsageStore, UsageSummary, add_event,
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use postgres::{Client, NoTls};
+use std::collections::BTreeMap;
 
 pub struct PostgresStore {
     client: Client,
@@ -27,6 +28,36 @@ impl PostgresStore {
             "CREATE INDEX IF NOT EXISTS agentusage_usage_events_project ON agentusage_usage_events(project);",
         )?;
         Ok(())
+    }
+
+    pub fn daily_trend_for_agent(
+        &mut self,
+        agent_name: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<DailyUsagePoint>> {
+        let rows = self.client.query(
+            "SELECT occurred_at::date, model, COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(total_tokens),0) FROM agentusage_usage_events WHERE occurred_at >= $1 AND occurred_at < $2 AND agent_name = $3 GROUP BY 1,2 ORDER BY 1,2",
+            &[&from, &to, &agent_name],
+        )?;
+        let mut points = BTreeMap::new();
+        for row in rows {
+            let date = row.get(0);
+            let model: Option<String> = row.get(1);
+            let point = points.entry(date).or_insert_with(|| DailyUsagePoint {
+                date,
+                ..Default::default()
+            });
+            point.input_tokens += row.get::<_, i64>(2);
+            point.output_tokens += row.get::<_, i64>(3);
+            point.cache_read_tokens += row.get::<_, i64>(4);
+            let total_tokens = row.get::<_, i64>(5);
+            point.total_tokens += total_tokens;
+            if let Some(model) = model.filter(|name| !name.is_empty()) {
+                *point.models.entry(model).or_default() += total_tokens;
+            }
+        }
+        Ok(points.into_values().collect())
     }
 }
 
@@ -146,7 +177,7 @@ impl UsageStore for PostgresStore {
                 },
             );
         }
-        for dimension in ["model", "client"] {
+        for dimension in ["model", "provider_id", "client"] {
             let rows = self.client.query(
                 &format!(
                     "SELECT {dimension}, COALESCE(SUM(requests),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(reasoning_tokens),0), COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(ai_units_nano),0), COALESCE(SUM(request_multiplier),0), COALESCE(SUM(ai_credits),0) FROM agentusage_usage_events WHERE occurred_at >= $1 AND occurred_at < $2 AND ($3::text IS NULL OR agent_name = $3) AND {dimension} IS NOT NULL AND {dimension} <> '' GROUP BY {dimension}"
@@ -158,6 +189,8 @@ impl UsageStore for PostgresStore {
                 let bucket = bucket_from_row(&row);
                 if dimension == "model" {
                     summary.models.insert(name, bucket);
+                } else if dimension == "provider_id" {
+                    summary.providers.insert(name, bucket);
                 } else {
                     summary.clients.insert(name, bucket);
                 }

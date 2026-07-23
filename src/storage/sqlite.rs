@@ -1,11 +1,11 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use super::{
-    FileCursor, IngestRecord, RawEvent, UsageBucket, UsageEvent, UsageMetric, UsageStore,
-    UsageSummary, add_event,
+    DailyUsagePoint, FileCursor, IngestRecord, RawEvent, UsageBucket, UsageEvent, UsageMetric,
+    UsageStore, UsageSummary, add_event,
 };
 
 pub struct SqliteStore {
@@ -71,7 +71,7 @@ impl SqliteStore {
         summary.lines_added = totals.13;
         summary.lines_removed = totals.14;
 
-        for dimension in ["model", "client", "project"] {
+        for dimension in ["model", "provider_id", "client", "project"] {
             let (dimension_expr, from_sql, filter_sql) = if dimension == "project" {
                 (
                     "COALESCE(e.project, json_extract(raw.payload, '$.payload.cwd'), json_extract(raw.payload, '$.cwd'))",
@@ -112,6 +112,9 @@ impl SqliteStore {
                     "model" => {
                         summary.models.insert(name, bucket);
                     }
+                    "provider_id" => {
+                        summary.providers.insert(name, bucket);
+                    }
                     "client" => {
                         summary.clients.insert(name, bucket);
                     }
@@ -146,6 +149,47 @@ impl SqliteStore {
         }
         self.attach_rate_limit(&mut summary, agent_name)?;
         Ok(summary)
+    }
+
+    pub fn daily_trend_for_agent(
+        &mut self,
+        agent_name: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<DailyUsagePoint>> {
+        let mut statement = self.connection.prepare(
+            "SELECT substr(occurred_at,1,10), model, COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(total_tokens),0) FROM agentusage_usage_events WHERE occurred_at >= ?1 AND occurred_at < ?2 AND agent_name = ?3 GROUP BY 1,2 ORDER BY 1,2",
+        )?;
+        let rows = statement.query_map(
+            params![from.to_rfc3339(), to.to_rfc3339(), agent_name],
+            |row| {
+                Ok((
+                    chrono::NaiveDate::parse_from_str(&row.get::<_, String>(0)?, "%Y-%m-%d")
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )?;
+        let mut points = BTreeMap::new();
+        for row in rows {
+            let (date, model, input_tokens, output_tokens, cache_read_tokens, total_tokens) = row?;
+            let point = points.entry(date).or_insert_with(|| DailyUsagePoint {
+                date,
+                ..Default::default()
+            });
+            point.input_tokens += input_tokens;
+            point.output_tokens += output_tokens;
+            point.cache_read_tokens += cache_read_tokens;
+            point.total_tokens += total_tokens;
+            if let Some(model) = model.filter(|name| !name.is_empty()) {
+                *point.models.entry(model).or_default() += total_tokens;
+            }
+        }
+        Ok(points.into_values().collect())
     }
 
     fn attach_rate_limit(&self, summary: &mut UsageSummary, agent_name: &str) -> Result<()> {
@@ -438,5 +482,15 @@ mod tests {
         assert_eq!(summary.cache_hit_rate(), Some(37.5));
         assert_eq!(summary.models["gpt-5"].total_tokens, 16);
         assert_eq!(summary.projects["agentusage"].total_tokens, 16);
+        let trend = store
+            .daily_trend_for_agent(
+                "codex",
+                occurred_at - chrono::Duration::minutes(1),
+                occurred_at + chrono::Duration::minutes(1),
+            )
+            .unwrap();
+        assert_eq!(trend.len(), 1);
+        assert_eq!(trend[0].total_tokens, 16);
+        assert_eq!(trend[0].models["gpt-5"], 16);
     }
 }

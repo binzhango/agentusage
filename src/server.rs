@@ -1,10 +1,20 @@
 use anyhow::{Context, Result};
 use chrono::{Duration, Local, NaiveDate};
 use serde::Serialize;
-use std::{collections::BTreeMap, process::Command, thread};
+use std::{collections::BTreeMap, process::Command, thread, time::Instant};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-const PROVIDERS: [&str; 4] = ["codex", "claude_code", "opencode", "copilot"];
+const PROVIDERS: [&str; 5] = ["codex", "claude_code", "opencode", "copilot", "pi"];
+
+macro_rules! server_log {
+    ($($arg:tt)*) => {
+        eprintln!(
+            "[{}] {}",
+            Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+            format_args!($($arg)*)
+        )
+    };
+}
 
 #[derive(Debug, Serialize)]
 struct ProviderStatus {
@@ -12,7 +22,7 @@ struct ProviderStatus {
     available: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct TrendPoint {
     date: NaiveDate,
     total_tokens: i64,
@@ -22,24 +32,27 @@ struct TrendPoint {
     models: BTreeMap<String, i64>,
 }
 
-pub fn run(host: &str, port: u16, open: bool) -> Result<()> {
+pub fn run(host: &str, port: u16, open: bool, verbose: bool) -> Result<()> {
     let address = format!("{host}:{port}");
     let server = Server::http(&address).map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let url = format!("http://{address}");
-    println!("agentusage server listening at {url}");
-    start_background_ingestion(crate::config::load()?);
+    println!("Agentusage server listening at {url}");
+    if verbose {
+        server_log!("server.start detail_logging=enabled");
+    }
+    start_background_ingestion(crate::config::load()?, verbose);
     if open {
         open_browser(&url);
     }
     for request in server.incoming_requests() {
-        if let Err(error) = handle_request(request) {
-            eprintln!("agentusage server request error: {error:#}");
+        if let Err(error) = handle_request(request, verbose) {
+            server_log!("request.error error={error:#}");
         }
     }
     Ok(())
 }
 
-fn start_background_ingestion(config: crate::config::AppConfig) {
+fn start_background_ingestion(config: crate::config::AppConfig, verbose: bool) {
     if !config.auto_sync {
         return;
     }
@@ -47,6 +60,10 @@ fn start_background_ingestion(config: crate::config::AppConfig) {
     for provider in PROVIDERS {
         std::thread::spawn(move || {
             loop {
+                let cycle_started = Instant::now();
+                if verbose {
+                    server_log!("ingest.start provider={provider}");
+                }
                 let result = (|| -> Result<()> {
                     let mode = crate::storage::prepare_backend_for_agent(false, provider)?;
                     let mut store = crate::storage::Backend::open_for_agent(mode, provider)?;
@@ -54,7 +71,12 @@ fn start_background_ingestion(config: crate::config::AppConfig) {
                     Ok(())
                 })();
                 if let Err(error) = result {
-                    eprintln!("agentusage server background ingestion ({provider}): {error:#}");
+                    server_log!("ingest.error provider={provider} error={error:#}");
+                } else if verbose {
+                    server_log!(
+                        "ingest.complete provider={provider} duration_ms={}",
+                        cycle_started.elapsed().as_secs_f64() * 1000.0
+                    );
                 }
                 thread::sleep(interval);
             }
@@ -62,94 +84,159 @@ fn start_background_ingestion(config: crate::config::AppConfig) {
     }
 }
 
-fn handle_request(request: Request) -> Result<()> {
+fn handle_request(request: Request, verbose: bool) -> Result<()> {
     let url = request.url().to_owned();
-    match (request.method(), url.split('?').next().unwrap_or("/")) {
-        (&Method::Get, "/") => respond_html(request),
-        (&Method::Get, "/api/providers") => respond_json(request, providers()),
-        (&Method::Get, "/api/summary") => {
-            let query = url.split_once('?').map(|(_, value)| value).unwrap_or("");
-            let params = query_params(query);
-            let provider = params
-                .get("provider")
-                .map(String::as_str)
-                .unwrap_or("codex");
-            let window = params.get("window").map(String::as_str).unwrap_or("today");
-            let summary = summary(provider, window)?;
-            respond_json(request, summary)
-        }
-        (&Method::Get, "/api/trend") => {
-            let query = url.split_once('?').map(|(_, value)| value).unwrap_or("");
-            let params = query_params(query);
-            let provider = params
-                .get("provider")
-                .map(String::as_str)
-                .unwrap_or("codex");
-            let window = params.get("window").map(String::as_str).unwrap_or("today");
-            respond_json(request, trend(provider, window)?)
-        }
-        _ => {
-            let response = Response::from_string("not found").with_status_code(StatusCode(404));
-            request.respond(response)?;
-            Ok(())
-        }
+    let path = url.split('?').next().unwrap_or("/").to_owned();
+    let started = Instant::now();
+    if verbose {
+        server_log!("request.start method={} path={path}", request.method());
     }
+    let result = (|| -> Result<()> {
+        match (request.method(), path.as_str()) {
+            (&Method::Get, "/") => respond_html(request),
+            (&Method::Get, "/api/providers") => respond_json(request, providers(verbose)),
+            (&Method::Get, "/api/summary") => {
+                let query = url.split_once('?').map(|(_, value)| value).unwrap_or("");
+                let params = query_params(query);
+                let provider = params
+                    .get("provider")
+                    .map(String::as_str)
+                    .unwrap_or("codex");
+                let window = params.get("window").map(String::as_str).unwrap_or("today");
+                let summary = summary(provider, window, verbose)?;
+                respond_json(request, summary)
+            }
+            (&Method::Get, "/api/trend") => {
+                let query = url.split_once('?').map(|(_, value)| value).unwrap_or("");
+                let params = query_params(query);
+                let provider = params
+                    .get("provider")
+                    .map(String::as_str)
+                    .unwrap_or("codex");
+                let window = params.get("window").map(String::as_str).unwrap_or("today");
+                respond_json(request, trend(provider, window, verbose)?)
+            }
+            _ => {
+                let response = Response::from_string("not found").with_status_code(StatusCode(404));
+                request.respond(response)?;
+                Ok(())
+            }
+        }
+    })();
+    if verbose {
+        server_log!(
+            "request.complete path={path} result={} duration_ms={}",
+            if result.is_ok() { "ok" } else { "error" },
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
+    }
+    result
 }
 
-fn providers() -> Vec<ProviderStatus> {
+fn providers(verbose: bool) -> Vec<ProviderStatus> {
     PROVIDERS
         .iter()
         .map(|name| ProviderStatus {
             name: (*name).to_owned(),
-            available: backend_for(name).is_ok(),
+            available: backend_for(name, verbose).is_ok(),
         })
         .collect()
 }
 
-fn summary(provider: &str, window: &str) -> Result<crate::storage::UsageSummary> {
+fn summary(provider: &str, window: &str, verbose: bool) -> Result<crate::storage::UsageSummary> {
     let (start, end) = window_dates(window)?;
     let from = crate::local_midnight_utc(start);
     let to = crate::local_midnight_utc(end + Duration::days(1));
-    let mut store = backend_for(provider)
+    if verbose {
+        server_log!("query.summary.start provider={provider} window={window} from={from} to={to}");
+    }
+    let mut store = backend_for(provider, verbose)
         .with_context(|| format!("no initialized storage for provider {provider}"))?;
-    store.quick_summary_for_agent(agent_name(provider), from, to)
+    let query_started = Instant::now();
+    let result = store.quick_summary_for_agent(agent_name(provider), from, to);
+    if verbose {
+        server_log!(
+            "query.summary.complete provider={provider} duration_ms={}",
+            query_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    result
 }
 
-fn trend(provider: &str, window: &str) -> Result<Vec<TrendPoint>> {
+fn trend(provider: &str, window: &str, verbose: bool) -> Result<Vec<TrendPoint>> {
     let (mut start, end) = window_dates(window)?;
     // A useful chart for "all time" should remain readable and inexpensive.
     // The summary endpoint still supports the complete all-time range.
     if window == "all" || window == "all_time" {
         start = end - Duration::days(89);
     }
+    let from = crate::local_midnight_utc(start);
+    let to = crate::local_midnight_utc(end + Duration::days(1));
+    if verbose {
+        server_log!("query.trend.start provider={provider} window={window} from={from} to={to}");
+    }
+    let mut store = backend_for(provider, verbose)
+        .with_context(|| format!("no initialized storage for provider {provider}"))?;
+    let query_started = Instant::now();
+    let daily_points = store.daily_trend_for_agent(agent_name(provider), from, to)?;
+    let data_days = daily_points.len();
+    if verbose {
+        server_log!(
+            "query.trend.complete provider={provider} data_days={data_days} duration_ms={}",
+            query_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    let points_by_date = daily_points
+        .into_iter()
+        .map(|point| {
+            (
+                point.date,
+                TrendPoint {
+                    date: point.date,
+                    total_tokens: point.total_tokens,
+                    input_tokens: point.input_tokens,
+                    output_tokens: point.output_tokens,
+                    cache_read_tokens: point.cache_read_tokens,
+                    models: point.models,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut points = Vec::new();
     let mut day = start;
     while day <= end {
-        let next = day + Duration::days(1);
-        let from = crate::local_midnight_utc(day);
-        let to = crate::local_midnight_utc(next);
-        let mut store = backend_for(provider)
-            .with_context(|| format!("no initialized storage for provider {provider}"))?;
-        let point = store.quick_summary_for_agent(agent_name(provider), from, to)?;
-        points.push(TrendPoint {
+        points.push(points_by_date.get(&day).cloned().unwrap_or(TrendPoint {
             date: day,
-            total_tokens: point.total_tokens,
-            input_tokens: point.input_tokens,
-            output_tokens: point.output_tokens,
-            cache_read_tokens: point.cache_read_tokens,
-            models: point
-                .models
-                .into_iter()
-                .map(|(name, bucket)| (name, bucket.total_tokens))
-                .collect(),
-        });
-        day = next;
+            total_tokens: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            models: BTreeMap::new(),
+        }));
+        day += Duration::days(1);
+    }
+    if verbose {
+        server_log!(
+            "trend.render provider={provider} rendered_days={}",
+            points.len()
+        );
     }
     Ok(points)
 }
 
-fn backend_for(provider: &str) -> Result<crate::storage::Backend> {
+fn backend_for(provider: &str, verbose: bool) -> Result<crate::storage::Backend> {
     let mode = crate::storage::prepare_backend_for_agent(false, provider)?;
+    if verbose {
+        match mode {
+            crate::storage::BackendMode::Sqlite => server_log!(
+                "backend.open provider={provider} backend=SQLite access=read_only path={}",
+                crate::config::agent_db_path(provider)?.display()
+            ),
+            crate::storage::BackendMode::Postgres => {
+                server_log!("backend.open provider={provider} backend=PostgreSQL access=read_only")
+            }
+        }
+    }
     crate::storage::Backend::open_read_only_for_agent(mode, provider)
 }
 
