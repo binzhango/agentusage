@@ -299,11 +299,10 @@ pub fn prepare_backend(interactive: bool) -> Result<BackendMode> {
 
 pub fn prepare_backend_for_agent(interactive: bool, agent: &str) -> Result<BackendMode> {
     let sqlite_path = crate::config::agent_db_path(agent)?;
-    if sqlite_path.exists() {
-        match sqlite::SqliteStore::open(&sqlite_path) {
-            Ok(_) => return Ok(BackendMode::Sqlite),
-            Err(_) => {}
-        }
+    if sqlite_path.exists()
+        && let Ok(_) = sqlite::SqliteStore::open(&sqlite_path)
+    {
+        return Ok(BackendMode::Sqlite);
     }
     let postgres_url = env::var("AGENTUSAGE_POSTGRES_URL")
         .ok()
