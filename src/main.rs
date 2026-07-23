@@ -227,6 +227,9 @@ fn parse_date_or_today(value: Option<&str>) -> Result<NaiveDate> {
 }
 
 fn prepare_report_backend(provider: &str) -> Result<storage::BackendMode> {
+    if provider == "pi" {
+        let _ = config::migrate_pi_database()?;
+    }
     let backend = storage::prepare_backend_for_agent(true, provider)?;
     Ok(backend)
 }

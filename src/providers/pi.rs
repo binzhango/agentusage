@@ -10,7 +10,7 @@ use std::{
 
 use crate::storage::{FileCursor, IngestRecord, RawEvent, UsageEvent, UsageMetric, UsageStore};
 
-const CURSOR_VERSION: &str = "pi-v1";
+const CURSOR_VERSION: &str = "pi-v2";
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct IngestStats {

@@ -100,6 +100,10 @@ PI_CODING_AGENT_SESSION_DIR=/path/to/sessions au sync pi
 au sync pi --sessions-dir /path/to/sessions
 ```
 
+When Pi ingestion format changes, `au sync pi` automatically rebuilds the
+derived Pi database from the JSONL source. The previous database is renamed to
+`pi.db.legacy` (or a numbered variant) as a recoverable backup.
+
 ## Explore usage in the browser
 
 The built-in page is delivered directly from the Rust binary. There is no
