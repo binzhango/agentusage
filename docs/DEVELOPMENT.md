@@ -12,13 +12,19 @@ make ci        # all checks
 ```
 
 Keep provider parsing deterministic and idempotent. Add a fixture or regression
-test whenever a local agent format changes. Storage migrations must be
-backward-compatible and must not delete existing usage data.
+test whenever a local agent format changes. Normalized databases are derived
+state: update the canonical schema directly and document when users must rebuild
+their provider database instead of adding compatibility migrations.
 
-Use `cargo run -- dashboard` to exercise the Ratatui dashboard, or
-`cargo run -- server` to exercise the local browser dashboard. The bare
-`agentusage` command prints help. Use `cargo run -- daily` or the other period
-commands when running detailed reports from a pipe or CI.
+PostgreSQL parity is exercised in CI with `AGENTUSAGE_TEST_POSTGRES_URL`. The
+test compares aggregate summaries, local-day trends, event filters, and detail
+metadata against the SQLite implementation.
+
+Use `cargo run --bin agentusage -- dashboard` to exercise the Ratatui
+dashboard, or `cargo run --bin agentusage -- server` to exercise the local
+browser dashboard. The bare `agentusage` command prints help. Use
+`cargo run --bin agentusage -- daily` or the other period commands when running
+detailed reports from a pipe or CI.
 
 The Rust crate is rooted at this directory. Local reference material is not a
 Cargo workspace member and must not be added to package includes, CI checkout

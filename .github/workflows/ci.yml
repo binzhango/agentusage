@@ -61,3 +61,47 @@ jobs:
 
       - name: Check package boundary
         run: cargo package --locked --allow-dirty
+
+  postgres-parity:
+    name: PostgreSQL parity
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: agentusage
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agentusage"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AGENTUSAGE_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/agentusage
+
+    steps:
+      - name: Check out Rust project only
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            Cargo.toml
+            Cargo.lock
+            src
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-postgres-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-postgres-cargo-
+
+      - name: Run backend parity tests
+        run: cargo test --locked sqlite_and_postgres_return_equivalent_usage_views

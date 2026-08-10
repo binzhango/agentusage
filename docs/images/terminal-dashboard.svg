@@ -1,18 +1,60 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
-  <title id="title">Agentusage terminal dashboard</title>
-  <desc id="desc">An interactive terminal dashboard showing provider cards, totals, models, and keyboard controls.</desc>
-  <rect width="1200" height="620" rx="18" fill="#111218"/>
-  <g font-family="ui-monospace, SFMono-Regular, monospace">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
+  <title id="title">Agentusage terminal prompt browser</title>
+  <desc id="desc">A terminal dashboard showing provider usage, recent prompt previews, local timestamps, and an expanded user prompt with source metadata.</desc>
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e2030"/>
+      <stop offset="1" stop-color="#151721"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="700" rx="18" fill="#0f1017"/>
+  <rect x="1" y="1" width="1198" height="698" rx="17" fill="none" stroke="#45485d" stroke-width="2"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
     <circle cx="28" cy="28" r="6" fill="#f28f8f"/><circle cx="48" cy="28" r="6" fill="#f6c177"/><circle cx="68" cy="28" r="6" fill="#8ed1c5"/>
     <text x="92" y="34" fill="#b9b9c8" font-size="14">au dashboard</text>
-    <rect x="18" y="54" width="1164" height="50" fill="#1e1f2b" stroke="#555568"/>
-    <text x="38" y="84" fill="#e9b4c9" font-size="20" font-weight="700">AGENTUSAGE</text><text x="220" y="84" fill="#ddd" font-size="15">Window: 7 Days</text><text x="1146" y="84" fill="#8b8b9e" font-size="13" text-anchor="end">w range  ·  r refresh  ·  q quit</text>
-    <g font-size="14">
-      <rect x="18" y="120" width="570" height="210" fill="#171821" stroke="#e9b4c9" stroke-width="2"/><text x="38" y="151" fill="#e9b4c9" font-size="18" font-weight="700">codex</text><text x="38" y="183" fill="#b9b9c8">tokens</text><text x="560" y="183" fill="#fff" text-anchor="end">4,821,360</text><text x="38" y="211" fill="#b9b9c8">requests</text><text x="560" y="211" fill="#fff" text-anchor="end">247</text><text x="38" y="239" fill="#b9b9c8">sessions</text><text x="560" y="239" fill="#fff" text-anchor="end">29</text><text x="38" y="267" fill="#b9b9c8">cost</text><text x="560" y="267" fill="#fff" text-anchor="end">$8.154920</text><text x="38" y="301" fill="#8ed1c5">top model: gpt-5</text>
-      <rect x="612" y="120" width="570" height="210" fill="#171821" stroke="#8ed1c5"/><text x="632" y="151" fill="#8ed1c5" font-size="18" font-weight="700">claude_code</text><text x="632" y="183" fill="#b9b9c8">tokens</text><text x="1154" y="183" fill="#fff" text-anchor="end">1,774,920</text><text x="632" y="211" fill="#b9b9c8">requests</text><text x="1154" y="211" fill="#fff" text-anchor="end">98</text><text x="632" y="239" fill="#b9b9c8">sessions</text><text x="1154" y="239" fill="#fff" text-anchor="end">14</text><text x="632" y="267" fill="#b9b9c8">cost</text><text x="1154" y="267" fill="#fff" text-anchor="end">$3.581040</text><text x="632" y="301" fill="#f6c177">top model: claude-sonnet</text>
-      <rect x="18" y="350" width="570" height="210" fill="#171821" stroke="#f6c177"/><text x="38" y="381" fill="#f6c177" font-size="18" font-weight="700">copilot</text><text x="38" y="413" fill="#b9b9c8">tokens</text><text x="560" y="413" fill="#fff" text-anchor="end">624,770</text><text x="38" y="441" fill="#b9b9c8">requests</text><text x="560" y="441" fill="#fff" text-anchor="end">73</text><text x="38" y="469" fill="#b9b9c8">sessions</text><text x="560" y="469" fill="#fff" text-anchor="end">8</text><text x="38" y="497" fill="#b9b9c8">AI credits</text><text x="560" y="497" fill="#fff" text-anchor="end">41.5</text><text x="38" y="531" fill="#9db5ff">clients: VS Code, CLI</text>
-      <rect x="612" y="350" width="570" height="210" fill="#171821" stroke="#9db5ff"/><text x="632" y="381" fill="#9db5ff" font-size="18" font-weight="700">opencode</text><text x="632" y="423" fill="#8b8b9e">No usage in this window.</text><text x="632" y="462" fill="#b9b9c8">Last sync</text><text x="1154" y="462" fill="#fff" text-anchor="end">2m ago</text><text x="632" y="500" fill="#8ed1c5">ready</text>
+
+    <rect x="18" y="52" width="1164" height="52" fill="#1b1d29" stroke="#45485d"/>
+    <text x="36" y="84" fill="#8ed1c5" font-size="20" font-weight="700">agentusage</text>
+    <text x="182" y="84" fill="#f7f2f4" font-size="15">5 providers · Codex Detail · 7 Days · ready</text>
+    <text x="1158" y="84" fill="#8b8fa5" font-size="12" text-anchor="end">↑↓ prompt · Enter expand · p requests · PgUp/PgDn scroll · Esc back</text>
+
+    <rect x="18" y="118" width="1164" height="116" rx="8" fill="url(#panel)" stroke="#e9b4c9"/>
+    <text x="38" y="145" fill="#d8d9e8" font-size="13" font-weight="700">Daily token trend · 2026-07-15 to 2026-07-21</text>
+    <g stroke="#303344" stroke-width="1"><line x1="38" y1="172" x2="1160" y2="172"/><line x1="38" y1="203" x2="1160" y2="203"/></g>
+    <path d="M44 207 L226 190 L408 199 L590 161 L772 178 L954 146 L1148 166" fill="none" stroke="#e9b4c9" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <g fill="#0f1017" stroke="#e9b4c9" stroke-width="2"><circle cx="44" cy="207" r="4"/><circle cx="226" cy="190" r="4"/><circle cx="408" cy="199" r="4"/><circle cx="590" cy="161" r="4"/><circle cx="772" cy="178" r="4"/><circle cx="954" cy="146" r="4"/><circle cx="1148" cy="166" r="4"/></g>
+
+    <rect x="18" y="248" width="382" height="214" rx="8" fill="url(#panel)" stroke="#55596e"/>
+    <text x="38" y="278" fill="#f6c177" font-size="16" font-weight="700">Usage</text>
+    <text x="38" y="309" fill="#8b8fa5" font-size="13">total tokens</text><text x="378" y="309" fill="#ffffff" font-size="14" text-anchor="end">4,821,360</text>
+    <text x="38" y="337" fill="#8b8fa5" font-size="13">requests / prompts</text><text x="378" y="337" fill="#ffffff" font-size="14" text-anchor="end">247 / 96</text>
+    <text x="38" y="365" fill="#8b8fa5" font-size="13">input / output</text><text x="378" y="365" fill="#ffffff" font-size="14" text-anchor="end">3,720,480 / 1,100,880</text>
+    <text x="38" y="393" fill="#8b8fa5" font-size="13">reason / cache</text><text x="378" y="393" fill="#ffffff" font-size="14" text-anchor="end">184,220 / 2,916,400</text>
+    <text x="38" y="421" fill="#8b8fa5" font-size="13">cache hit / cost</text><text x="378" y="421" fill="#8ed1c5" font-size="14" text-anchor="end">78.4% / $8.154920</text>
+    <text x="38" y="448" fill="#e9b4c9" font-size="13">gpt-5 · provider total is authoritative</text>
+
+    <rect x="416" y="248" width="766" height="214" rx="8" fill="url(#panel)" stroke="#55596e"/>
+    <text x="436" y="278" fill="#8ed1c5" font-size="16" font-weight="700">Recent Prompts</text>
+    <g font-size="12">
+      <text x="436" y="307" fill="#73788e">#</text><text x="468" y="307" fill="#73788e">timestamp (local)</text><text x="666" y="307" fill="#73788e">model</text><text x="836" y="307" fill="#73788e">prompt preview</text>
+      <line x1="436" y1="318" x2="1158" y2="318" stroke="#36394c"/>
+      <rect x="430" y="326" width="734" height="28" rx="4" fill="#2b2d40"/>
+      <text x="438" y="345" fill="#f6c177">› 1</text><text x="468" y="345" fill="#ffffff">07-21 14:42:11</text><text x="666" y="345" fill="#e9b4c9">gpt-5</text><text x="836" y="345" fill="#ffffff">Review token accounting and double-counting…</text>
+      <text x="438" y="378" fill="#8b8fa5">  2</text><text x="468" y="378" fill="#d7d8e4">07-21 14:39:06</text><text x="666" y="378" fill="#d7d8e4">gpt-5</text><text x="836" y="378" fill="#d7d8e4">Add paginated prompt browsing and search…</text>
+      <text x="438" y="411" fill="#8b8fa5">  3</text><text x="468" y="411" fill="#d7d8e4">07-21 14:35:49</text><text x="666" y="411" fill="#d7d8e4">codex-mini</text><text x="836" y="411" fill="#d7d8e4">Create provider extraction regression tests…</text>
+      <text x="438" y="444" fill="#8b8fa5">  4</text><text x="468" y="444" fill="#d7d8e4">07-21 14:30:18</text><text x="666" y="444" fill="#d7d8e4">gpt-5</text><text x="836" y="444" fill="#d7d8e4">Explain the request-level usage breakdown…</text>
     </g>
-    <text x="18" y="596" fill="#8b8b9e" font-size="13">Database-backed · local-only by default · live refresh</text>
+
+    <rect x="18" y="478" width="1164" height="164" rx="8" fill="#171925" stroke="#8ed1c5"/>
+    <text x="38" y="507" fill="#8ed1c5" font-size="15" font-weight="700">Selected prompt</text>
+    <g font-size="12">
+      <text x="38" y="536" fill="#8b8fa5">timestamp</text><text x="190" y="536" fill="#f7f2f4">2026-07-21 14:42:11 EDT / 18:42:11 UTC</text>
+      <text x="38" y="562" fill="#8b8fa5">session / model</text><text x="190" y="562" fill="#f7f2f4">session_17c… / gpt-5</text>
+      <text x="38" y="588" fill="#8b8fa5">source</text><text x="190" y="588" fill="#f7f2f4">codex / jsonl</text>
+      <text x="610" y="536" fill="#8b8fa5">prompt text</text><text x="740" y="536" fill="#f7f2f4">Review the token accounting and explain any</text>
+      <text x="740" y="562" fill="#f7f2f4">double-counting risks. Add regression tests.</text>
+      <text x="610" y="588" fill="#8b8fa5">source locator</text><text x="740" y="588" fill="#f7f2f4">unavailable</text>
+    </g>
+    <text x="18" y="676" fill="#73788e" font-size="12">Local-first · schema-versioned · SQLite/PostgreSQL parity tested</text>
   </g>
 </svg>

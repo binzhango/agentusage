@@ -4,7 +4,14 @@
 //! timestamptz. The table and column names are intentionally identical so the
 //! ingestion and reporting layers have one portable data model.
 
+pub const VERSION: i64 = 2;
+
 pub const SQLITE: &str = r#"
+CREATE TABLE IF NOT EXISTS agentusage_schema (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    version INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO agentusage_schema (singleton, version) VALUES (1, 2);
 CREATE TABLE IF NOT EXISTS agentusage_ingest_records (
     record_id TEXT PRIMARY KEY,
     source_path TEXT NOT NULL,
@@ -89,6 +96,12 @@ CREATE INDEX IF NOT EXISTS agentusage_usage_raw_events_assistant_usage_id
 "#;
 
 pub const POSTGRES: &str = r#"
+CREATE TABLE IF NOT EXISTS agentusage_schema (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    version BIGINT NOT NULL
+);
+INSERT INTO agentusage_schema (singleton, version) VALUES (1, 2)
+ON CONFLICT (singleton) DO NOTHING;
 CREATE TABLE IF NOT EXISTS agentusage_ingest_records (
     record_id TEXT PRIMARY KEY,
     source_path TEXT NOT NULL,

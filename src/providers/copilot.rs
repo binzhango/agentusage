@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::core::TokenSemantics;
 use crate::storage::{RawEvent, UsageEvent, UsageStore};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -106,8 +107,11 @@ fn ingest_vscode_chat_sessions<S: UsageStore>(store: &mut S) -> Result<IngestSta
             else {
                 continue;
             };
-            let event_id = stable(&format!("copilot:vscode:chat:{request_id}"));
-            let raw_event_id = stable(&format!("raw:copilot:vscode:chat:{request_id}"));
+            // VS Code writes the same request to the chat session and text log.
+            // Use one source request identity so the richer chat-session record
+            // wins deterministically (it is ingested before the log scan).
+            let event_id = stable(&format!("copilot:vscode:{request_id}"));
+            let raw_event_id = stable(&format!("raw:copilot:vscode:{request_id}"));
             let event = UsageEvent {
                 event_id: event_id.clone(),
                 occurred_at,
@@ -358,8 +362,12 @@ fn ingest_database<S: UsageStore>(path: &PathBuf, store: &mut S) -> Result<Inges
             .get::<_, Option<String>>(11)?
             .unwrap_or_else(|| "CLI".into());
         let created_at: String = row.get(12)?;
-        let occurred_at = parse_timestamp(&created_at).unwrap_or_else(Utc::now);
-        let total = input + output + cache_read + cache_write + reasoning;
+        let Some(occurred_at) = parse_timestamp(&created_at) else {
+            stats.malformed_lines += 1;
+            continue;
+        };
+        let total =
+            TokenSemantics::Additive.total(input, output, reasoning, cache_read, cache_write);
         let ai_credits = ai_units as f64 / 1_000_000_000.0 * multiplier;
         let event_id = stable(&format!("copilot:assistant_usage_event:{id}"));
         let payload = json!({

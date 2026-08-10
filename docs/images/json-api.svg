@@ -1,23 +1,58 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
-  <title id="title">Agentusage local JSON API</title>
-  <desc id="desc">HTTP endpoints for providers, summary metrics, and trend data return structured JSON.</desc>
-  <rect width="1200" height="500" rx="18" fill="#181923"/>
-  <g font-family="ui-monospace, monospace">
-    <text x="42" y="55" fill="#f7f2f4" font-size="23" font-weight="700">Local JSON API</text>
-    <text x="42" y="84" fill="#8b8b9e" font-size="15">http://127.0.0.1:8787</text>
-    <rect x="40" y="112" width="360" height="338" rx="10" fill="#1e1f2b" stroke="#555568"/>
-    <text x="66" y="154" fill="#8ed1c5" font-size="14" font-weight="700">GET</text><text x="116" y="154" fill="#ddd" font-size="15">/api/providers</text>
-    <line x1="64" y1="174" x2="376" y2="174" stroke="#38394a"/>
-    <text x="66" y="214" fill="#8ed1c5" font-size="14" font-weight="700">GET</text><text x="116" y="214" fill="#ddd" font-size="15">/api/summary</text>
-    <text x="116" y="239" fill="#8b8b9e" font-size="12">?provider=codex&amp;window=7d</text>
-    <line x1="64" y1="262" x2="376" y2="262" stroke="#38394a"/>
-    <text x="66" y="302" fill="#8ed1c5" font-size="14" font-weight="700">GET</text><text x="116" y="302" fill="#ddd" font-size="15">/api/trend</text>
-    <text x="116" y="327" fill="#8b8b9e" font-size="12">?provider=codex&amp;window=30d</text>
-    <line x1="64" y1="350" x2="376" y2="350" stroke="#38394a"/>
-    <text x="66" y="392" fill="#f6c177" font-size="14">SQLite / PostgreSQL</text>
-    <text x="66" y="418" fill="#8b8b9e" font-size="12">No external service required</text>
-    <rect x="430" y="112" width="730" height="338" rx="10" fill="#101118" stroke="#555568"/>
-    <circle cx="458" cy="137" r="6" fill="#f28f8f"/><circle cx="478" cy="137" r="6" fill="#f6c177"/><circle cx="498" cy="137" r="6" fill="#8ed1c5"/>
-    <g font-size="15"><text x="462" y="184" fill="#b9b9c8">{</text><text x="490" y="214" fill="#e9b4c9">"provider"</text><text x="592" y="214" fill="#b9b9c8">:</text><text x="610" y="214" fill="#8ed1c5">"codex"</text><text x="676" y="214" fill="#b9b9c8">,</text><text x="490" y="246" fill="#e9b4c9">"window"</text><text x="574" y="246" fill="#b9b9c8">:</text><text x="592" y="246" fill="#8ed1c5">"7d"</text><text x="628" y="246" fill="#b9b9c8">,</text><text x="490" y="278" fill="#e9b4c9">"total_tokens"</text><text x="626" y="278" fill="#b9b9c8">:</text><text x="644" y="278" fill="#f6c177">4821360</text><text x="712" y="278" fill="#b9b9c8">,</text><text x="490" y="310" fill="#e9b4c9">"requests"</text><text x="592" y="310" fill="#b9b9c8">:</text><text x="610" y="310" fill="#f6c177">247</text><text x="642" y="310" fill="#b9b9c8">,</text><text x="490" y="342" fill="#e9b4c9">"sessions"</text><text x="592" y="342" fill="#b9b9c8">:</text><text x="610" y="342" fill="#f6c177">29</text><text x="634" y="342" fill="#b9b9c8">,</text><text x="490" y="374" fill="#e9b4c9">"cost_usd"</text><text x="600" y="374" fill="#b9b9c8">:</text><text x="618" y="374" fill="#f6c177">8.15492</text><text x="462" y="406" fill="#b9b9c8">}</text></g>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="title desc">
+  <title id="title">Agentusage request and prompt JSON API</title>
+  <desc id="desc">The loopback-only JSON API exposes summaries, trends, request events, searchable user prompts, stable cursors, and structured errors.</desc>
+  <defs>
+    <linearGradient id="api-panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#202231"/><stop offset="1" stop-color="#141620"/></linearGradient>
+  </defs>
+  <rect width="1200" height="640" rx="18" fill="#11131b"/>
+  <rect x="1" y="1" width="1198" height="638" rx="17" fill="none" stroke="#45485d" stroke-width="2"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+    <text x="38" y="50" fill="#f7f2f4" font-size="23" font-weight="700">Local JSON API</text>
+    <text x="38" y="78" fill="#8b8fa5" font-size="14">http://127.0.0.1:8787 · loopback only · Cache-Control: no-store</text>
+
+    <rect x="30" y="100" width="398" height="494" rx="10" fill="url(#api-panel)" stroke="#55596e"/>
+    <text x="52" y="132" fill="#9db5ff" font-size="14" font-weight="700">READ-ONLY ROUTES</text>
+    <g font-size="13">
+      <rect x="48" y="151" width="46" height="23" rx="4" fill="#193a36"/><text x="71" y="167" fill="#8ed1c5" text-anchor="middle">GET</text><text x="108" y="167" fill="#f7f2f4">/api/providers</text>
+      <line x1="48" y1="187" x2="408" y2="187" stroke="#343748"/>
+      <rect x="48" y="203" width="46" height="23" rx="4" fill="#193a36"/><text x="71" y="219" fill="#8ed1c5" text-anchor="middle">GET</text><text x="108" y="219" fill="#f7f2f4">/api/summary</text>
+      <text x="108" y="241" fill="#73788e" font-size="11">?provider=codex&amp;window=7d</text>
+      <line x1="48" y1="257" x2="408" y2="257" stroke="#343748"/>
+      <rect x="48" y="273" width="46" height="23" rx="4" fill="#193a36"/><text x="71" y="289" fill="#8ed1c5" text-anchor="middle">GET</text><text x="108" y="289" fill="#f7f2f4">/api/trend</text>
+      <text x="108" y="311" fill="#73788e" font-size="11">local calendar days · zero-filled</text>
+      <line x1="48" y1="327" x2="408" y2="327" stroke="#343748"/>
+      <rect x="48" y="343" width="46" height="23" rx="4" fill="#24405a"/><text x="71" y="359" fill="#9db5ff" text-anchor="middle">GET</text><text x="108" y="359" fill="#ffffff" font-weight="700">/api/events</text>
+      <text x="108" y="381" fill="#73788e" font-size="11">limit · cursor · model · session · status</text>
+      <line x1="48" y1="397" x2="408" y2="397" stroke="#343748"/>
+      <rect x="48" y="413" width="46" height="23" rx="4" fill="#24405a"/><text x="71" y="429" fill="#9db5ff" text-anchor="middle">GET</text><text x="108" y="429" fill="#ffffff" font-weight="700">/api/events/&lt;event-id&gt;</text>
+      <text x="108" y="451" fill="#73788e" font-size="11">derived metadata + preserved raw payload</text>
+      <line x1="48" y1="462" x2="408" y2="462" stroke="#343748"/>
+      <rect x="48" y="474" width="46" height="23" rx="4" fill="#193a36"/><text x="71" y="490" fill="#8ed1c5" text-anchor="middle">GET</text><text x="108" y="490" fill="#ffffff" font-weight="700">/api/prompts · /&lt;prompt-id&gt;</text>
+    </g>
+    <rect x="48" y="516" width="360" height="62" rx="7" fill="#151722" stroke="#3c4054"/>
+    <text x="64" y="540" fill="#f6c177" font-size="12" font-weight="700">Stable response contract</text>
+    <text x="64" y="562" fill="#8b8fa5" font-size="11">400 validation · 404 missing · 503 storage</text>
+
+    <rect x="450" y="100" width="720" height="494" rx="10" fill="#0c0e15" stroke="#55596e"/>
+    <circle cx="476" cy="126" r="5" fill="#f28f8f"/><circle cx="494" cy="126" r="5" fill="#f6c177"/><circle cx="512" cy="126" r="5" fill="#8ed1c5"/>
+    <text x="538" y="131" fill="#73788e" font-size="12">GET /api/prompts?provider=codex&amp;window=30d&amp;search=parser</text>
+    <g font-size="12">
+      <text x="476" y="169" fill="#b9b9c8">{</text>
+      <text x="500" y="195" fill="#e9b4c9">"prompts"</text><text x="578" y="195" fill="#b9b9c8">: [{</text>
+      <text x="526" y="221" fill="#e9b4c9">"event_id"</text><text x="614" y="221" fill="#b9b9c8">:</text><text x="630" y="221" fill="#8ed1c5">"5f3a…"</text><text x="687" y="221" fill="#b9b9c8">,</text>
+      <text x="526" y="247" fill="#e9b4c9">"occurred_at"</text><text x="638" y="247" fill="#b9b9c8">:</text><text x="654" y="247" fill="#8ed1c5">"2026-07-21T18:42:11Z"</text><text x="873" y="247" fill="#b9b9c8">,</text>
+      <text x="526" y="273" fill="#e9b4c9">"model"</text><text x="590" y="273" fill="#b9b9c8">:</text><text x="606" y="273" fill="#8ed1c5">"gpt-5"</text><text x="663" y="273" fill="#b9b9c8">,</text>
+      <text x="526" y="299" fill="#e9b4c9">"session_id"</text><text x="630" y="299" fill="#b9b9c8">:</text><text x="646" y="299" fill="#8ed1c5">"session-17c…"</text><text x="752" y="299" fill="#b9b9c8">,</text>
+      <text x="526" y="325" fill="#e9b4c9">"project"</text><text x="598" y="325" fill="#b9b9c8">:</text><text x="614" y="325" fill="#8ed1c5">"agentusage"</text><text x="704" y="325" fill="#b9b9c8">,</text>
+      <text x="526" y="351" fill="#e9b4c9">"prompts"</text><text x="598" y="351" fill="#b9b9c8">:</text><text x="614" y="351" fill="#f6c177">1</text><text x="630" y="351" fill="#b9b9c8">,</text>
+      <text x="526" y="377" fill="#e9b4c9">"text"</text><text x="574" y="377" fill="#b9b9c8">:</text><text x="590" y="377" fill="#8ed1c5">"Review the parser and add malformed-input</text>
+      <text x="590" y="403" fill="#8ed1c5">tests with pagination coverage."</text><text x="830" y="403" fill="#b9b9c8">,</text>
+      <text x="526" y="429" fill="#e9b4c9">"source_system"</text><text x="646" y="429" fill="#b9b9c8">:</text><text x="662" y="429" fill="#8ed1c5">"codex"</text><text x="720" y="429" fill="#b9b9c8">,</text>
+      <text x="526" y="455" fill="#e9b4c9">"source_locator"</text><text x="654" y="455" fill="#b9b9c8">:</text><text x="670" y="455" fill="#73788e">null</text>
+      <text x="500" y="481" fill="#b9b9c8">}],</text>
+      <text x="500" y="507" fill="#e9b4c9">"next_cursor"</text><text x="606" y="507" fill="#b9b9c8">:</text><text x="622" y="507" fill="#8ed1c5">"2026-07-21T18:42:11+00:00|5f3a…"</text>
+      <text x="476" y="559" fill="#b9b9c8">}</text>
+    </g>
+    <text x="450" y="620" fill="#73788e" font-size="11">Opt-in prompt UI · no-store responses · compound cursor pagination · loopback only</text>
   </g>
 </svg>
