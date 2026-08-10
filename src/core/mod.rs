@@ -1,103 +1,71 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Status {
-    #[serde(rename = "OK")]
-    Ok,
-    #[serde(rename = "NEAR_LIMIT")]
-    NearLimit,
-    #[serde(rename = "LIMITED")]
-    Limited,
-    #[serde(rename = "AUTH_REQUIRED")]
-    AuthRequired,
-    #[serde(rename = "UNSUPPORTED")]
-    Unsupported,
-    #[serde(rename = "ERROR")]
-    Error,
-    #[default]
-    #[serde(rename = "UNKNOWN")]
-    Unknown,
+/// Describes whether provider usage fields are inclusive breakdowns or
+/// independent counters. A provider-reported total always wins; this policy is
+/// used only when a source omits its authoritative total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenSemantics {
+    /// OpenAI input includes cached input and output includes reasoning.
+    OpenAi,
+    /// Anthropic cache counters are additional input, while output includes
+    /// thinking/reasoning tokens.
+    Anthropic,
+    /// Every component is an independent counter, as exposed by OpenCode, Pi,
+    /// and Copilot's local usage database.
+    Additive,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct Metric {
-    pub limit: Option<f64>,
-    pub remaining: Option<f64>,
-    pub used: Option<f64>,
-    pub unit: String,
-    pub window: String,
-}
-
-impl Metric {
-    pub fn percent(&self) -> f64 {
-        match (self.limit, self.remaining, self.used) {
-            (Some(limit), Some(remaining), _) if limit > 0.0 => remaining / limit * 100.0,
-            (Some(limit), _, Some(used)) if limit > 0.0 => (limit - used) / limit * 100.0,
-            _ => -1.0,
+impl TokenSemantics {
+    pub fn total(
+        self,
+        input: i64,
+        output: i64,
+        reasoning: i64,
+        cache_read: i64,
+        cache_write: i64,
+    ) -> i64 {
+        match self {
+            Self::OpenAi => input + output,
+            Self::Anthropic => input + output + cache_read + cache_write,
+            Self::Additive => input + output + reasoning + cache_read + cache_write,
         }
+    }
+
+    pub fn cache_hit_rate(self, input: i64, cache_read: i64, cache_write: i64) -> Option<f64> {
+        let denominator = match self {
+            Self::OpenAi => input,
+            Self::Anthropic | Self::Additive => input + cache_read + cache_write,
+        };
+        (denominator > 0 && cache_read > 0).then(|| cache_read as f64 / denominator as f64 * 100.0)
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct TokenUsage {
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub reasoning_tokens: Option<i64>,
-    pub cache_read_tokens: Option<i64>,
-    pub cache_write_tokens: Option<i64>,
-    pub total_tokens: Option<i64>,
-    pub cost_usd: Option<f64>,
-    pub requests: Option<i64>,
-}
-
-impl TokenUsage {
-    pub fn sum_total_tokens(&mut self) {
-        if self.total_tokens.is_some() {
-            return;
-        }
-        let values = [
-            self.input_tokens,
-            self.output_tokens,
-            self.reasoning_tokens,
-            self.cache_read_tokens,
-            self.cache_write_tokens,
-        ];
-        if values.iter().any(Option::is_some) {
-            self.total_tokens = Some(values.into_iter().flatten().sum());
-        }
+pub fn token_semantics_for_agent(agent: &str) -> TokenSemantics {
+    match agent {
+        "codex" => TokenSemantics::OpenAi,
+        "claude_code" => TokenSemantics::Anthropic,
+        _ => TokenSemantics::Additive,
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct UsageSnapshot {
-    pub provider_id: String,
-    pub account_id: String,
-    pub timestamp: DateTime<Utc>,
-    pub status: Status,
-    pub metrics: std::collections::BTreeMap<String, Metric>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct UsageEvent {
-    pub time: DateTime<Utc>,
-    pub provider_id: String,
-    pub model: String,
-    pub project: String,
-    pub session: String,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cache_read_tokens: i64,
-    pub cache_creation_tokens: i64,
-    pub reasoning_tokens: i64,
-    pub cost_usd: f64,
-    pub has_cost: bool,
-}
+    #[test]
+    fn inclusive_breakdowns_are_not_double_counted() {
+        assert_eq!(TokenSemantics::OpenAi.total(100, 20, 8, 60, 0), 120);
+        assert_eq!(TokenSemantics::Anthropic.total(40, 20, 8, 50, 10), 120);
+        assert_eq!(TokenSemantics::Additive.total(40, 20, 8, 50, 10), 128);
+    }
 
-pub trait UsageProvider {
-    fn id(&self) -> &str;
-}
-
-pub trait ItemizedUsageProvider {
-    fn itemized_usage(&self) -> anyhow::Result<Vec<UsageEvent>>;
+    #[test]
+    fn cache_rate_respects_provider_input_semantics() {
+        assert_eq!(
+            TokenSemantics::OpenAi.cache_hit_rate(100, 60, 0),
+            Some(60.0)
+        );
+        assert_eq!(
+            TokenSemantics::Anthropic.cache_hit_rate(40, 50, 10),
+            Some(50.0)
+        );
+    }
 }

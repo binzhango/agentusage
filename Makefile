@@ -10,7 +10,7 @@ test:
 	cargo test --locked
 
 lint:
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --all-targets --all-features --locked -- -D warnings
 
 package:
 	cargo package --locked --allow-dirty

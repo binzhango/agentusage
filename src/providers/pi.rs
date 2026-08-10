@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::core::TokenSemantics;
 use crate::storage::{FileCursor, IngestRecord, RawEvent, UsageEvent, UsageMetric, UsageStore};
 
 const CURSOR_VERSION: &str = "pi-v2";
@@ -289,13 +290,16 @@ fn append_usage<S: UsageStore>(
     persist: bool,
     stats: &mut IngestStats,
 ) -> Result<()> {
-    let Some(at) = occurred_at else {
-        return Ok(());
-    };
     let values = usage_values(usage);
     if values.total == 0 && values.input == 0 && values.output == 0 {
         return Ok(());
     }
+    let Some(at) = occurred_at else {
+        if persist {
+            stats.malformed_lines += 1;
+        }
+        return Ok(());
+    };
     if persist {
         stats.token_records += 1;
     }
@@ -319,7 +323,13 @@ fn append_usage<S: UsageStore>(
         total_tokens: if values.total > 0 {
             values.total
         } else {
-            values.input + values.output + values.cache_read + values.cache_write
+            TokenSemantics::Additive.total(
+                values.input,
+                values.output,
+                0,
+                values.cache_read,
+                values.cache_write,
+            )
         },
         cost_usd: values.cost,
         requests: 1,
@@ -494,7 +504,7 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    use crate::storage::{UsageStore, sqlite::SqliteStore};
+    use crate::storage::{PromptQuery, UsageStore, sqlite::SqliteStore};
 
     #[test]
     fn ingests_pi_usage_prompts_tools_and_provider_metadata() {
@@ -526,6 +536,21 @@ mod tests {
         assert!(summary.providers.contains_key("openai-codex"));
         assert!(summary.projects.contains_key("pi-project"));
         assert_eq!(summary.tools.get("bash"), Some(&1));
+        let prompts = store
+            .prompts(
+                "pi",
+                &PromptQuery {
+                    from: "2026-07-19T00:00:00Z".parse().unwrap(),
+                    to: "2026-07-20T00:00:00Z".parse().unwrap(),
+                    before: None,
+                    limit: 10,
+                    session_id: None,
+                    search: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].text, "Fix it");
     }
 
     #[test]

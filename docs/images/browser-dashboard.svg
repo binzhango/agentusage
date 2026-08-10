@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="660" viewBox="0 0 1200 660" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="750" viewBox="0 0 1200 750" role="img" aria-labelledby="title desc">
   <title id="title">Agentusage browser dashboard</title>
-  <desc id="desc">A dark dashboard showing provider usage cards, token metrics, a trend chart, model breakdowns, and date range controls.</desc>
-  <rect width="1200" height="660" rx="18" fill="#181923"/>
-  <rect x="1" y="1" width="1198" height="658" rx="17" fill="none" stroke="#454557" stroke-width="2"/>
+  <desc id="desc">A dark dashboard showing provider usage cards, prompt counts, opt-in prompt history, token trends, and model breakdowns.</desc>
+  <rect width="1200" height="750" rx="18" fill="#181923"/>
+  <rect x="1" y="1" width="1198" height="748" rx="17" fill="none" stroke="#454557" stroke-width="2"/>
   <circle cx="30" cy="35" r="6" fill="#f7f2f4"/>
   <text x="48" y="42" fill="#f7f2f4" font-family="ui-monospace, monospace" font-size="22" font-weight="700">Agentusage</text>
   <g font-family="ui-monospace, monospace" font-size="15" text-anchor="middle">
@@ -13,11 +13,11 @@
   </g>
   <line x1="0" y1="70" x2="1200" y2="70" stroke="#454557"/>
   <g font-family="ui-monospace, monospace">
-    <rect x="18" y="88" width="572" height="552" rx="9" fill="#1e1f2b" stroke="#555568"/>
+    <rect x="18" y="88" width="572" height="642" rx="9" fill="#1e1f2b" stroke="#555568"/>
     <text x="36" y="128" fill="#e9b4c9" font-size="21" font-weight="700">codex</text>
-    <rect x="468" y="104" width="104" height="30" rx="4" fill="#292a3a" stroke="#666"/><text x="520" y="124" fill="#eee" font-size="13" text-anchor="middle">Download PNG</text>
+    <rect x="458" y="104" width="114" height="30" rx="4" fill="#292a3a" stroke="#666"/><text x="515" y="124" fill="#eee" font-size="13" text-anchor="middle">Download SVG</text>
     <text x="36" y="155" fill="#9e9eb2" font-size="14">Window: today</text>
-    <g font-size="16"><text x="36" y="195" fill="#ddd">tokens</text><text x="570" y="195" fill="#fff" text-anchor="end" font-weight="700">1,248,320</text><text x="36" y="229" fill="#ddd">requests</text><text x="570" y="229" fill="#fff" text-anchor="end" font-weight="700">84</text><text x="36" y="263" fill="#ddd">sessions</text><text x="570" y="263" fill="#fff" text-anchor="end" font-weight="700">12</text><text x="36" y="297" fill="#ddd">cost</text><text x="570" y="297" fill="#fff" text-anchor="end" font-weight="700">$2.431820</text></g>
+    <g font-size="16"><text x="36" y="195" fill="#ddd">tokens</text><text x="570" y="195" fill="#fff" text-anchor="end" font-weight="700">1,248,320</text><text x="36" y="229" fill="#ddd">requests / prompts</text><text x="570" y="229" fill="#fff" text-anchor="end" font-weight="700">84 / 39</text><text x="36" y="263" fill="#ddd">sessions</text><text x="570" y="263" fill="#fff" text-anchor="end" font-weight="700">12</text><text x="36" y="297" fill="#ddd">cost</text><text x="570" y="297" fill="#fff" text-anchor="end" font-weight="700">$2.431820</text></g>
     <g stroke="#30313f"><line x1="36" y1="207" x2="570" y2="207"/><line x1="36" y1="241" x2="570" y2="241"/><line x1="36" y1="275" x2="570" y2="275"/><line x1="36" y1="309" x2="570" y2="309"/></g>
     <text x="36" y="347" fill="#d9a7c0" font-size="17" font-weight="700">Token usage trend</text>
     <g stroke="#363746"><line x1="64" y1="378" x2="560" y2="378"/><line x1="64" y1="432" x2="560" y2="432"/><line x1="64" y1="486" x2="560" y2="486"/></g>
@@ -28,11 +28,12 @@
     <circle cx="42" cy="536" r="5" fill="#e9b4c9"/><text x="54" y="541" fill="#9e9eb2" font-size="12">total</text><circle cx="108" cy="536" r="5" fill="#8ed1c5"/><text x="120" y="541" fill="#9e9eb2" font-size="12">gpt-5</text>
     <text x="36" y="577" fill="#d9a7c0" font-size="17" font-weight="700">Model burn</text>
     <g font-size="12"><text x="36" y="607" fill="#9e9eb2">model</text><text x="286" y="607" fill="#9e9eb2">input</text><text x="380" y="607" fill="#9e9eb2">output</text><text x="570" y="607" fill="#9e9eb2" text-anchor="end">total</text><line x1="36" y1="617" x2="570" y2="617" stroke="#38394a"/><text x="36" y="634" fill="#e9b4c9">gpt-5</text><text x="286" y="634" fill="#ddd">982,640</text><text x="380" y="634" fill="#ddd">265,680</text><text x="570" y="634" fill="#ddd" text-anchor="end">1,248,320</text></g>
-    <rect x="608" y="88" width="574" height="552" rx="9" fill="#1e1f2b" stroke="#555568"/>
+    <rect x="36" y="655" width="536" height="55" rx="7" fill="#181923" stroke="#454557"/><text x="52" y="680" fill="#d9a7c0" font-size="13" font-weight="700">Prompt history</text><text x="52" y="699" fill="#8b8b9e" font-size="11">Prompt text stays hidden until requested</text><rect x="458" y="666" width="96" height="30" rx="6" fill="#292a3a" stroke="#e9b4c9"/><text x="506" y="686" fill="#e9b4c9" font-size="12" text-anchor="middle">Show prompts</text>
+    <rect x="608" y="88" width="574" height="642" rx="9" fill="#1e1f2b" stroke="#555568"/>
     <text x="626" y="128" fill="#e9b4c9" font-size="21" font-weight="700">claude_code</text>
-    <rect x="1060" y="104" width="104" height="30" rx="4" fill="#292a3a" stroke="#666"/><text x="1112" y="124" fill="#eee" font-size="13" text-anchor="middle">Download PNG</text>
+    <rect x="1050" y="104" width="114" height="30" rx="4" fill="#292a3a" stroke="#666"/><text x="1107" y="124" fill="#eee" font-size="13" text-anchor="middle">Download SVG</text>
     <text x="626" y="155" fill="#9e9eb2" font-size="14">Window: today</text>
-    <g font-size="16"><text x="626" y="195" fill="#ddd">tokens</text><text x="1164" y="195" fill="#fff" text-anchor="end" font-weight="700">486,911</text><text x="626" y="229" fill="#ddd">requests</text><text x="1164" y="229" fill="#fff" text-anchor="end" font-weight="700">31</text><text x="626" y="263" fill="#ddd">sessions</text><text x="1164" y="263" fill="#fff" text-anchor="end" font-weight="700">5</text><text x="626" y="297" fill="#ddd">cost</text><text x="1164" y="297" fill="#fff" text-anchor="end" font-weight="700">$0.918540</text></g>
+    <g font-size="16"><text x="626" y="195" fill="#ddd">tokens</text><text x="1164" y="195" fill="#fff" text-anchor="end" font-weight="700">486,911</text><text x="626" y="229" fill="#ddd">requests / prompts</text><text x="1164" y="229" fill="#fff" text-anchor="end" font-weight="700">31 / 24</text><text x="626" y="263" fill="#ddd">sessions</text><text x="1164" y="263" fill="#fff" text-anchor="end" font-weight="700">5</text><text x="626" y="297" fill="#ddd">cost</text><text x="1164" y="297" fill="#fff" text-anchor="end" font-weight="700">$0.918540</text></g>
     <g stroke="#30313f"><line x1="626" y1="207" x2="1164" y2="207"/><line x1="626" y1="241" x2="1164" y2="241"/><line x1="626" y1="275" x2="1164" y2="275"/><line x1="626" y1="309" x2="1164" y2="309"/></g>
     <text x="626" y="347" fill="#d9a7c0" font-size="17" font-weight="700">Token usage trend</text>
     <g stroke="#363746"><line x1="654" y1="378" x2="1152" y2="378"/><line x1="654" y1="432" x2="1152" y2="432"/><line x1="654" y1="486" x2="1152" y2="486"/></g>
@@ -42,5 +43,6 @@
     <circle cx="632" cy="536" r="5" fill="#e9b4c9"/><text x="644" y="541" fill="#9e9eb2" font-size="12">total</text><circle cx="698" cy="536" r="5" fill="#f6c177"/><text x="710" y="541" fill="#9e9eb2" font-size="12">sonnet</text>
     <text x="626" y="577" fill="#d9a7c0" font-size="17" font-weight="700">Model burn</text>
     <g font-size="12"><text x="626" y="607" fill="#9e9eb2">model</text><text x="878" y="607" fill="#9e9eb2">input</text><text x="972" y="607" fill="#9e9eb2">output</text><text x="1164" y="607" fill="#9e9eb2" text-anchor="end">total</text><line x1="626" y1="617" x2="1164" y2="617" stroke="#38394a"/><text x="626" y="634" fill="#e9b4c9">claude-sonnet</text><text x="878" y="634" fill="#ddd">411,245</text><text x="972" y="634" fill="#ddd">75,666</text><text x="1164" y="634" fill="#ddd" text-anchor="end">486,911</text></g>
+    <rect x="626" y="655" width="538" height="55" rx="7" fill="#181923" stroke="#454557"/><text x="642" y="680" fill="#d9a7c0" font-size="13" font-weight="700">Prompt history</text><text x="642" y="699" fill="#8b8b9e" font-size="11">Prompt text stays hidden until requested</text><rect x="1050" y="666" width="96" height="30" rx="6" fill="#292a3a" stroke="#e9b4c9"/><text x="1098" y="686" fill="#e9b4c9" font-size="12" text-anchor="middle">Show prompts</text>
   </g>
 </svg>

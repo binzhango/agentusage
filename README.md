@@ -13,8 +13,8 @@ and track estimated cost without sending usage data to a hosted service.
 
 ![Agentusage browser dashboard with provider cards, metrics, trends, and model breakdowns](docs/images/browser-dashboard.svg)
 
-> **Status:** Early access. Provider formats evolve frequently, so sanitized
-> fixtures, bug reports, and pull requests are especially valuable.
+> Provider formats evolve frequently. Agentusage rejects malformed usage
+> records without source timestamps and keeps raw source events for auditing.
 
 ## Highlights
 
@@ -24,8 +24,9 @@ and track estimated cost without sending usage data to a hosted service.
 - Token, cache, request, session, cost, and code-change metrics
 - Downloadable SVG snapshots of provider cards
 - Hideable provider cards with persistent dashboard preferences
-- Interactive terminal dashboard and period-based CLI reports
-- Local JSON API for scripts and custom integrations
+- Interactive terminal dashboard with trends and request-level drill-down
+- Local JSON API with aggregate, trend, and paginated request endpoints
+- Private prompt-history browsing in the TUI and browser, with local search
 - SQLite by default, with optional PostgreSQL
 - Incremental, idempotent ingestion with raw event preservation
 - Light and dark themes
@@ -34,9 +35,9 @@ and track estimated cost without sending usage data to a hosted service.
 
 | Provider | Local source | Imported data |
 | --- | --- | --- |
-| `codex` | Codex rollout JSONL | Tokens, models, cache, cost, sessions, code changes |
-| `claude_code` | Claude Code session JSONL | Tokens, models, sessions |
-| `opencode` | OpenCode session JSONL | Tokens, models, sessions, cost |
+| `codex` | Codex rollout JSONL | Prompts, tokens, models, cache, cost, sessions, code changes |
+| `claude_code` | Claude Code session JSONL | Prompts, tokens, models, sessions |
+| `opencode` | OpenCode session JSONL | Prompts, tokens, models, sessions, cost |
 | `copilot` | Copilot CLI databases and VS Code logs | CLI/IDE attribution, models, tokens, AI credits |
 | `pi` | Pi append-only session JSONL | Providers, models, prompts, tokens, cost, projects, tools |
 
@@ -54,6 +55,7 @@ Synchronize the providers you use, then open the dashboard:
 ```bash
 au sync codex
 au sync claude_code
+au sync opencode
 au sync copilot
 au sync pi
 au server --open
@@ -75,9 +77,15 @@ au server --open
 ```
 
 The dashboard includes summary metrics, daily trends, per-model breakdowns,
-full-page provider views, persistent card visibility, themes, and SVG export.
+paginated prompt browsing and search, full-page provider views, persistent card
+visibility, themes, and SVG export.
+Prompt bodies are fetched only after selecting `Show prompts`.
 It is embedded in the Rust binary; no Node.js runtime or separate frontend
 server is required.
+
+Prompt history contains textual user messages only. Assistant responses, tool
+results, and provider metadata messages are excluded. GitHub Copilot's current
+local sources do not expose prompt bodies, so its prompt history is empty.
 
 ### Terminal dashboard
 
@@ -85,7 +93,9 @@ server is required.
 au dashboard
 ```
 
-Use `w` to change the time window, `r` to refresh, and `q` to quit.
+Use `w` to change the time window, `r` to refresh, and `Enter` to open a
+provider. In detail view, press `p` to switch between requests and prompts,
+use `j`/`k` to select a row, and press `Enter` to inspect its full details.
 
 ![Agentusage interactive terminal dashboard](docs/images/terminal-dashboard.svg)
 
@@ -107,8 +117,11 @@ au server
 curl 'http://127.0.0.1:8787/api/summary?provider=codex&window=30d'
 ```
 
-The local server exposes provider availability, aggregate summaries, and daily
-trend data. See the [API reference](docs/API.md) for routes and response fields.
+The local server exposes provider availability, aggregate summaries, daily
+trends, paginated request events, and searchable prompt history. See the
+[API reference](docs/API.md) for routes and response fields.
+
+![Agentusage local JSON API with paginated request events and token provenance](docs/images/json-api.svg)
 
 ## Installation
 
@@ -134,7 +147,6 @@ rescanning source files.
 ```mermaid
 flowchart LR
     Sources[Agent history files] --> Sync[Incremental sync]
-    Hooks[Telemetry hooks] --> Normalize[Normalize and deduplicate]
     Sync --> Normalize
     Normalize --> Storage[(SQLite or PostgreSQL)]
     Storage --> CLI[CLI reports]
@@ -145,13 +157,19 @@ flowchart LR
 SQLite and all browser endpoints are local by default. PostgreSQL is used only
 when explicitly configured.
 
+Token totals follow provider-specific semantics: OpenAI cache and reasoning
+fields are treated as breakdowns of input/output totals, Anthropic cache input
+is additive while reasoning is an output breakdown, and providers with
+independent counters use additive totals. A provider-reported total is
+authoritative when present.
+
 ## Documentation
 
 | Guide | Contents |
 | --- | --- |
 | [Usage guide](docs/USAGE.md) | Synchronization, dashboard, reports, Pi, and command examples |
 | [API reference](docs/API.md) | HTTP routes, parameters, response fields, and error behavior |
-| [Configuration](docs/CONFIGURATION.md) | Storage, automatic sync, PostgreSQL, telemetry, and privacy |
+| [Configuration](docs/CONFIGURATION.md) | Storage, automatic sync, PostgreSQL, and privacy |
 | [Development](docs/DEVELOPMENT.md) | Local setup, tests, and contributor checks |
 | [Releasing](docs/RELEASING.md) | Versioning, builds, crates.io, and GitHub releases |
 | [Changelog](CHANGELOG.md) | Release history |
@@ -159,20 +177,19 @@ when explicitly configured.
 ## Privacy and security
 
 Agentusage does not require a hosted account and does not send usage data to a
-project-controlled service. Provider history, normalized databases, raw events,
-and PostgreSQL credentials may contain sensitive information and should be
-protected accordingly.
+project-controlled service. Provider history, prompt text, normalized
+databases, raw events, and PostgreSQL credentials may contain sensitive
+information and should be protected accordingly.
 
-The HTTP server binds to `127.0.0.1` by default and has no built-in
-authentication. Do not expose it to an untrusted network without a protective
-reverse proxy.
+The HTTP server accepts loopback hosts only (`127.0.0.1`, `localhost`, or
+`::1`) and has no built-in authentication.
 
 ## Contributing
 
 Bug reports and pull requests are welcome. When changing provider ingestion:
 
 1. Include a sanitized fixture or regression test when possible.
-2. Preserve idempotent ingestion and backward-compatible storage behavior.
+2. Preserve deterministic, idempotent normalization and documented token semantics.
 3. Run the checks in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 4. Never commit credentials, private transcripts, or local databases.
 

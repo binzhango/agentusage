@@ -30,14 +30,22 @@ run `agentusage sync opencode` after selecting a database backend
 Run the suggested command when you use that provider. Otherwise, hide its card
 from the browser dashboard.
 
+After upgrading to a build that adds prompt history, synchronize each provider
+once so existing source history is indexed. Synchronization is idempotent and
+does not modify the original agent history:
+
+```bash
+au sync codex
+au sync claude_code
+au sync opencode
+au sync pi
+```
+
 To import from a non-default source directory:
 
 ```bash
 au sync codex --sessions-dir /path/to/codex/sessions
 ```
-
-Compatibility forms such as `agentusage sync --provider codex` and
-`agentusage ingest --provider codex` are also supported.
 
 ## Browser dashboard
 
@@ -52,7 +60,7 @@ options are:
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--host <HOST>` | `127.0.0.1` | Address on which the server listens |
+| `--host <HOST>` | `127.0.0.1` | Loopback host (`127.0.0.1`, `localhost`, or `::1`) |
 | `--port <PORT>` | `8787` | TCP port |
 | `--open` | disabled | Open the dashboard in the system browser |
 | `--verbose` | disabled | Print request, backend, query, ingestion, and timing logs |
@@ -75,6 +83,8 @@ Every available provider includes:
 - daily total and per-model trend lines;
 - hover details with model, date, and token count;
 - input, output, cache-read, cache-write, and total-token tables;
+- recent prompt previews with expandable full text and pagination;
+- prompt search in full-page provider views;
 - a dedicated full-page provider view;
 - downloadable SVG snapshots;
 - light and dark themes.
@@ -82,6 +92,10 @@ Every available provider includes:
 The main page supports hiding provider cards. Hidden cards are remembered in
 the browser and can be restored individually or all at once from the header
 dropdown.
+
+Prompt bodies are opt-in: select `Show prompts` on a provider card to retrieve
+them from local storage. Full-page provider views also provide prompt search
+and paginated loading.
 
 Time-range controls include `Today`, `7 Days`, `30 Days`, and `All Time`.
 All-time summaries use complete history, while all-time trend charts show the
@@ -100,7 +114,7 @@ agentusage-codex-7d.svg
 SVG files can be opened in current browsers, Preview, Figma, and most design
 tools. Generation happens entirely in the browser.
 
-![A provider usage card downloaded as a standalone SVG image](images/png-export.svg)
+![A provider usage card downloaded as a standalone SVG image](images/svg-export.svg)
 
 ## Terminal dashboard
 
@@ -114,11 +128,64 @@ Keyboard controls:
 
 | Key | Action |
 | --- | --- |
+| `↑` / `↓`, `j` / `k` | Select a provider, recent request, or prompt |
+| `Enter` / `Tab` | Open provider detail or return to the grid |
+| `p` in detail | Switch between recent requests and prompts |
+| `Enter` in detail | Toggle metadata or full prompt text for the selected row |
+| `PageUp` / `PageDown` | Scroll provider detail |
 | `w` | Cycle through time windows |
 | `r` | Refresh |
-| `q` | Quit |
+| `Esc` | Close request detail or return to the grid |
+| `q` | Quit from any view |
 
-The terminal dashboard requires an interactive terminal.
+The detail view includes a daily token sparkline, provider/model breakdowns,
+the 25 most recent normalized requests, and the 25 most recent retrievable user
+prompts. Timestamps are shown in the machine's local timezone. Prompt bodies
+remain local and are available only when the provider persists them. The
+terminal dashboard requires an interactive terminal.
+
+## Prompt history
+
+Agentusage retrieves prompt text from textual user-message records already
+stored in local provider history. It excludes assistant responses, tool
+results, and provider metadata messages from prompt results.
+
+| Provider | Prompt source | Availability |
+| --- | --- | --- |
+| `codex` | User messages in rollout JSONL | Supported |
+| `claude_code` | Non-metadata user messages in session JSONL | Supported |
+| `opencode` | Text parts associated with user messages | Supported |
+| `pi` | User messages in append-only session JSONL | Supported |
+| `copilot` | Copilot CLI databases and VS Code logs | Not exposed by the current local sources |
+
+In the browser, choose `Show prompts` on a provider card. Open the full provider
+page to search prompt text and load older pages. Prompt text is not requested
+by the page before that explicit action and is not included in downloaded SVG
+card snapshots.
+
+In the terminal dashboard, open a provider and press `p`. Use `j`/`k` or the
+arrow keys to select a prompt, then press `Enter` to expand its full text and
+source metadata. The list follows the dashboard's active time window and shows
+up to 25 recent prompts.
+
+Prompt records can include a timestamp, model, session, project, provider
+source, and source locator. Some providers do not persist every field, so
+optional metadata can be empty. Search is a case-insensitive substring match.
+
+Prompt text can contain source code, credentials pasted into an agent, file
+paths, or other confidential data. The server is loopback-only and marks API
+responses `Cache-Control: no-store`, but any local process or person with access
+to the database can read stored prompts. Protect normalized databases and avoid
+copying prompt API responses into bug reports or release artifacts.
+
+If prompt history is empty for a supported provider:
+
+1. Confirm the selected time window contains user messages.
+2. Run `au sync <provider>` again to index existing source history.
+3. Confirm the provider's original history still contains textual user
+   messages; deleted or tool-only records cannot be reconstructed.
+4. Use `/api/prompts?provider=<provider>&window=all` to distinguish missing data
+   from a TUI or browser filter.
 
 ## CLI reports
 
@@ -162,7 +229,6 @@ agentusage weekly --help
 agentusage monthly --help
 agentusage yearly --help
 agentusage range --help
-agentusage telemetry --help
 ```
 
 Running `agentusage` without a subcommand prints the top-level help.
@@ -196,10 +262,6 @@ PI_CODING_AGENT_SESSION_DIR=/path/to/sessions au sync pi
 au sync pi --sessions-dir /path/to/sessions
 ```
 
-When the Pi ingestion format changes, synchronization may rebuild the derived
-database from its source JSONL. The previous database is retained as
-`pi.db.legacy` or a numbered variant.
-
 Pi's reported cost remains an estimate. Subscription usage is not treated as a
 direct invoice.
 
@@ -207,4 +269,4 @@ direct invoice.
 
 - See [API.md](API.md) for local HTTP integrations.
 - See [CONFIGURATION.md](CONFIGURATION.md) for storage, automatic sync,
-  PostgreSQL, telemetry hooks, and security notes.
+  PostgreSQL, and security notes.

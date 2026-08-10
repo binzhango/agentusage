@@ -4,26 +4,18 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
 };
 
+use crate::core::TokenSemantics;
 use crate::storage::{FileCursor, RawEvent, UsageEvent, UsageStore};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Agent {
     ClaudeCode,
     OpenCode,
-}
-
-impl Agent {
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "claude_code",
-            Self::OpenCode => "opencode",
-        }
-    }
 }
 
 pub fn default_dir(agent: Agent) -> PathBuf {
@@ -63,7 +55,7 @@ pub fn ingest_into_store<S: UsageStore>(
         let key = path.to_string_lossy().into_owned();
         if let Some(cursor) = store.cursor(&key)?
             && cursor.file_size == size
-            && cursor.last_event_hash.as_deref() == Some("project-v2")
+            && cursor.last_event_hash.as_deref() == Some("prompts-v3")
         {
             continue;
         }
@@ -79,7 +71,7 @@ pub fn ingest_into_store<S: UsageStore>(
             path: key,
             byte_offset: size,
             file_size: size,
-            last_event_hash: Some("project-v2".into()),
+            last_event_hash: Some("prompts-v3".into()),
             updated_at: Utc::now(),
         })?;
     }
@@ -95,10 +87,54 @@ fn ingest_claude_file<S: UsageStore>(
     let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let mut seen = HashSet::new();
     for (line, raw) in text.lines().enumerate() {
-        let Ok(entry) = serde_json::from_str::<ClaudeEntry>(raw) else {
+        let Ok(payload) = serde_json::from_str::<Value>(raw) else {
             *malformed += 1;
             continue;
         };
+        let Ok(entry) = serde_json::from_value::<ClaudeEntry>(payload.clone()) else {
+            *malformed += 1;
+            continue;
+        };
+        if entry.entry_type == "user"
+            && payload.get("isMeta").and_then(Value::as_bool) != Some(true)
+        {
+            let Some(message) = entry.message.as_ref() else {
+                continue;
+            };
+            if !message.content.as_ref().is_some_and(has_prompt_text) {
+                continue;
+            }
+            let Some(at) = parse_time(entry.timestamp.as_deref()) else {
+                *malformed += 1;
+                continue;
+            };
+            let key = entry
+                .uuid
+                .clone()
+                .or_else(|| message.id.clone())
+                .unwrap_or_else(|| line.to_string());
+            let id = stable(&format!("claude-prompt:{path:?}:{key}"));
+            let event = UsageEvent {
+                event_id: id.clone(),
+                occurred_at: at,
+                provider_id: "anthropic".into(),
+                agent_name: "claude_code".into(),
+                session_id: entry.session_id.clone(),
+                model: message.model.clone(),
+                client: Some("CLI".into()),
+                project: entry
+                    .cwd
+                    .as_deref()
+                    .and_then(project_name)
+                    .or_else(|| project_from_path(path)),
+                prompts: 1,
+                dedup_key: id,
+                raw_event_id: stable(&format!("raw:claude-prompt:{path:?}:{key}")),
+                ..Default::default()
+            };
+            append(store, &event, payload)?;
+            continue;
+        }
         if entry.entry_type != "assistant" {
             continue;
         }
@@ -117,6 +153,7 @@ fn ingest_claude_file<S: UsageStore>(
             continue;
         }
         let Some(at) = parse_time(entry.timestamp.as_deref()) else {
+            *malformed += 1;
             continue;
         };
         let model = message.model.unwrap_or_else(|| "unknown".into());
@@ -129,7 +166,13 @@ fn ingest_claude_file<S: UsageStore>(
         let output = usage.output_tokens;
         let cache_read = usage.cache_read_input_tokens;
         let cache_write = usage.cache_creation_input_tokens;
-        let total = input + output + usage.reasoning_tokens + cache_read + cache_write;
+        let total = TokenSemantics::Anthropic.total(
+            input,
+            output,
+            usage.reasoning_tokens,
+            cache_read,
+            cache_write,
+        );
         let id = stable(&format!("claude:{path:?}:{key}"));
         let event = UsageEvent {
             event_id: id.clone(),
@@ -152,7 +195,7 @@ fn ingest_claude_file<S: UsageStore>(
             raw_event_id: stable(&format!("raw:claude:{path:?}:{key}")),
             ..Default::default()
         };
-        append(store, &event, serde_json::from_str(raw)?)?;
+        append(store, &event, payload)?;
         *records += 1;
     }
     Ok(())
@@ -165,6 +208,8 @@ fn ingest_opencode_file<S: UsageStore>(
     malformed: &mut usize,
 ) -> Result<()> {
     let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let mut prompts = BTreeMap::<String, OpenCodePrompt>::new();
+    let mut prompt_parts = BTreeMap::<String, BTreeMap<String, Value>>::new();
     for (line, raw) in text.lines().enumerate() {
         let Ok(root) = serde_json::from_str::<Value>(raw) else {
             *malformed += 1;
@@ -175,6 +220,26 @@ fn ingest_opencode_file<S: UsageStore>(
             .or_else(|| root.get("event"))
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if kind == "message.part.updated" {
+            let part = root
+                .pointer("/properties/part")
+                .or_else(|| root.pointer("/payload/part"));
+            if let Some(part) = part
+                && part.get("type").and_then(Value::as_str) == Some("text")
+                && part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
+                && let Some(message_id) = string(part, "messageID")
+            {
+                let part_id = string(part, "id").unwrap_or_else(|| line.to_string());
+                prompt_parts
+                    .entry(message_id)
+                    .or_default()
+                    .insert(part_id, part.clone());
+            }
+            continue;
+        }
         if kind != "message.updated" {
             continue;
         }
@@ -184,7 +249,40 @@ fn ingest_opencode_file<S: UsageStore>(
         let Some(info) = info else {
             continue;
         };
-        if info.get("role").and_then(Value::as_str).unwrap_or_default() != "assistant" {
+        let role = info.get("role").and_then(Value::as_str).unwrap_or_default();
+        if role == "user" {
+            let Some(message_id) = string(info, "id") else {
+                continue;
+            };
+            let Some(raw_time) = info.pointer("/time/created").and_then(Value::as_i64) else {
+                *malformed += 1;
+                continue;
+            };
+            let Some(occurred_at) = unix_time(raw_time) else {
+                *malformed += 1;
+                continue;
+            };
+            prompts.insert(
+                message_id,
+                OpenCodePrompt {
+                    occurred_at,
+                    session_id: string(info, "sessionID"),
+                    provider_id: info
+                        .pointer("/model/providerID")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| "opencode".into()),
+                    model: info
+                        .pointer("/model/modelID")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    raw_message: info.clone(),
+                    line_number: line + 1,
+                },
+            );
+            continue;
+        }
+        if role != "assistant" {
             continue;
         }
         let session = string(info, "sessionID");
@@ -195,13 +293,20 @@ fn ingest_opencode_file<S: UsageStore>(
         let reasoning = number(info.pointer("/tokens/reasoning"));
         let cache_read = number(info.pointer("/tokens/cache/read"));
         let cache_write = number(info.pointer("/tokens/cache/write"));
-        let total = input + output + reasoning + cache_read + cache_write;
-        let at = info
+        let Some(raw_time) = info
             .pointer("/time/completed")
             .and_then(Value::as_i64)
             .or_else(|| info.pointer("/time/created").and_then(Value::as_i64))
-            .map(unix_time)
-            .unwrap_or_else(Utc::now);
+        else {
+            *malformed += 1;
+            continue;
+        };
+        let Some(at) = unix_time(raw_time) else {
+            *malformed += 1;
+            continue;
+        };
+        let total =
+            TokenSemantics::Additive.total(input, output, reasoning, cache_read, cache_write);
         let event = UsageEvent {
             event_id: id.clone(),
             occurred_at: at,
@@ -226,10 +331,53 @@ fn ingest_opencode_file<S: UsageStore>(
             raw_event_id: stable(&format!("raw:opencode:{message}")),
             ..Default::default()
         };
-        append(store, &event, root)?;
+        upsert_snapshot(store, &event, root)?;
         *records += 1;
     }
+    for (message_id, prompt) in prompts {
+        let Some(parts) = prompt_parts.remove(&message_id) else {
+            continue;
+        };
+        let parts = parts.into_values().collect::<Vec<_>>();
+        if parts.is_empty() {
+            continue;
+        }
+        let id = stable(&format!("opencode-prompt:{message_id}"));
+        let event = UsageEvent {
+            event_id: id.clone(),
+            occurred_at: prompt.occurred_at,
+            provider_id: prompt.provider_id,
+            agent_name: "opencode".into(),
+            session_id: prompt.session_id,
+            model: prompt.model,
+            client: Some("OpenCode".into()),
+            project: project_from_path(path),
+            prompts: 1,
+            dedup_key: id,
+            raw_event_id: stable(&format!("raw:opencode-prompt:{message_id}")),
+            ..Default::default()
+        };
+        upsert_snapshot(
+            store,
+            &event,
+            serde_json::json!({
+                "message": prompt.raw_message,
+                "parts": parts,
+                "source_path": path.to_string_lossy(),
+                "line_number": prompt.line_number,
+            }),
+        )?;
+    }
     Ok(())
+}
+
+struct OpenCodePrompt {
+    occurred_at: DateTime<Utc>,
+    session_id: Option<String>,
+    provider_id: String,
+    model: Option<String>,
+    raw_message: Value,
+    line_number: usize,
 }
 
 #[derive(Deserialize)]
@@ -241,6 +389,7 @@ struct ClaudeEntry {
     timestamp: Option<String>,
     #[serde(rename = "requestId")]
     request_id: Option<String>,
+    uuid: Option<String>,
     message: Option<ClaudeMessage>,
     #[serde(default)]
     cwd: Option<String>,
@@ -249,7 +398,23 @@ struct ClaudeEntry {
 struct ClaudeMessage {
     id: Option<String>,
     model: Option<String>,
+    content: Option<Value>,
     usage: Option<ClaudeUsage>,
+}
+
+fn has_prompt_text(value: &Value) -> bool {
+    match value {
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(values) => values.iter().any(has_prompt_text),
+        Value::Object(object) => {
+            object.get("type").and_then(Value::as_str) == Some("text")
+                && object
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
+        }
+        _ => false,
+    }
 }
 #[derive(Deserialize)]
 struct ClaudeUsage {
@@ -273,6 +438,19 @@ fn append<S: UsageStore>(store: &mut S, event: &UsageEvent, payload: Value) -> R
         payload_hash: stable(&serde_json::to_string(&payload)?),
     })?;
     store.append_usage_event(event)?;
+    Ok(())
+}
+
+fn upsert_snapshot<S: UsageStore>(store: &mut S, event: &UsageEvent, payload: Value) -> Result<()> {
+    store.upsert_raw_event(&RawEvent {
+        event_id: event.raw_event_id.clone(),
+        source_system: event.agent_name.clone(),
+        source_channel: "jsonl".into(),
+        occurred_at: event.occurred_at,
+        payload: payload.clone(),
+        payload_hash: stable(&serde_json::to_string(&payload)?),
+    })?;
+    store.upsert_usage_event(event)?;
     Ok(())
 }
 fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -328,11 +506,11 @@ fn parse_time(value: Option<&str>) -> Option<DateTime<Utc>> {
         .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
         .map(|v| v.with_timezone(&Utc))
 }
-fn unix_time(value: i64) -> DateTime<Utc> {
+fn unix_time(value: i64) -> Option<DateTime<Utc>> {
     if value > 10_000_000_000 {
-        DateTime::from_timestamp_millis(value).unwrap_or_else(Utc::now)
+        DateTime::from_timestamp_millis(value)
     } else {
-        DateTime::from_timestamp(value, 0).unwrap_or_else(Utc::now)
+        DateTime::from_timestamp(value, 0)
     }
 }
 fn stable(value: &str) -> String {
@@ -346,9 +524,181 @@ fn claude_cost(model: &str, input: i64, output: i64, cache_read: i64, cache_writ
         (15.0, 75.0, 1.5, 18.75)
     } else if m.contains("haiku") {
         (0.8, 4.0, 0.08, 1.0)
-    } else {
+    } else if m.contains("sonnet") {
         (3.0, 15.0, 0.3, 3.75)
+    } else {
+        return 0.0;
     };
     (input as f64 * i + output as f64 * o + cache_read as f64 * r + cache_write as f64 * w)
         / 1_000_000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    use crate::storage::{PromptQuery, UsageStore, sqlite::SqliteStore};
+
+    #[test]
+    fn opencode_updates_replace_partial_message_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        for output in [1, 9] {
+            writeln!(
+                file,
+                r#"{{"type":"message.updated","properties":{{"info":{{"role":"assistant","id":"message-1","sessionID":"session-1","providerID":"openai","modelID":"gpt-5","tokens":{{"input":10,"output":{output},"reasoning":0,"cache":{{"read":2,"write":0}}}},"time":{{"completed":1784437200000}}}}}}}}"#
+            )
+            .unwrap();
+        }
+
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        ingest_into_store(
+            Agent::OpenCode,
+            Some(dir.path().to_str().unwrap()),
+            &mut store,
+        )
+        .unwrap();
+        let summary = store
+            .summary_for_agent(
+                Some("opencode"),
+                "2026-07-19T00:00:00Z".parse().unwrap(),
+                "2026-07-20T00:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(summary.requests, 1);
+        assert_eq!(summary.total_tokens, 21);
+    }
+
+    #[test]
+    fn opencode_rejects_usage_without_a_source_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"message.updated","properties":{"info":{"role":"assistant","id":"message-1","tokens":{"input":10,"output":1}}}}"#,
+        )
+        .unwrap();
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let (_, _, records, malformed) = ingest_into_store(
+            Agent::OpenCode,
+            Some(dir.path().to_str().unwrap()),
+            &mut store,
+        )
+        .unwrap();
+        assert_eq!(records, 0);
+        assert_eq!(malformed, 1);
+    }
+
+    #[test]
+    fn claude_rejects_missing_timestamps_and_does_not_double_count_reasoning() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"assistant","sessionId":"session-1","message":{"id":"missing-time","model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":4}}}"#,
+                "\n",
+                r#"{"type":"assistant","sessionId":"session-1","timestamp":"2026-07-19T12:00:00Z","message":{"id":"valid","model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":4,"reasoning_tokens":2,"cache_read_input_tokens":6,"cache_creation_input_tokens":1}}}"#
+            ),
+        )
+        .unwrap();
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let (_, _, records, malformed) = ingest_into_store(
+            Agent::ClaudeCode,
+            Some(dir.path().to_str().unwrap()),
+            &mut store,
+        )
+        .unwrap();
+        assert_eq!(records, 1);
+        assert_eq!(malformed, 1);
+        let summary = store
+            .summary_for_agent(
+                Some("claude_code"),
+                "2026-07-19T00:00:00Z".parse().unwrap(),
+                "2026-07-20T00:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(summary.reasoning_tokens, 2);
+        assert_eq!(summary.total_tokens, 21);
+    }
+
+    #[test]
+    fn claude_indexes_user_text_without_tool_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"user","uuid":"prompt-1","sessionId":"session-1","timestamp":"2026-07-19T12:00:00Z","cwd":"/tmp/agentusage","message":{"role":"user","content":[{"type":"text","text":"Add prompt browsing"}]}}"#,
+                "\n",
+                r#"{"type":"user","uuid":"tool-1","sessionId":"session-1","timestamp":"2026-07-19T12:00:01Z","message":{"role":"user","content":[{"type":"tool_result","content":"not a prompt"}]}}"#,
+            ),
+        )
+        .unwrap();
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        ingest_into_store(
+            Agent::ClaudeCode,
+            Some(dir.path().to_str().unwrap()),
+            &mut store,
+        )
+        .unwrap();
+        let prompts = store
+            .prompts(
+                "claude_code",
+                &PromptQuery {
+                    from: "2026-07-19T00:00:00Z".parse().unwrap(),
+                    to: "2026-07-20T00:00:00Z".parse().unwrap(),
+                    before: None,
+                    limit: 10,
+                    session_id: None,
+                    search: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].text, "Add prompt browsing");
+        assert_eq!(prompts[0].usage.project.as_deref(), Some("agentusage"));
+    }
+
+    #[test]
+    fn opencode_combines_user_text_parts_into_one_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"message.updated","properties":{"info":{"role":"user","id":"message-1","sessionID":"session-1","model":{"providerID":"openai","modelID":"gpt-5"},"time":{"created":1784437200000}}}}"#,
+                "\n",
+                r#"{"type":"message.part.updated","properties":{"part":{"type":"text","id":"part-1","messageID":"message-1","sessionID":"session-1","text":"Build the prompt API"}}}"#,
+                "\n",
+                r#"{"type":"message.part.updated","properties":{"part":{"type":"text","id":"part-2","messageID":"message-1","sessionID":"session-1","text":"and add pagination"}}}"#,
+            ),
+        )
+        .unwrap();
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        ingest_into_store(
+            Agent::OpenCode,
+            Some(dir.path().to_str().unwrap()),
+            &mut store,
+        )
+        .unwrap();
+        let prompts = store
+            .prompts(
+                "opencode",
+                &PromptQuery {
+                    from: "2026-07-19T00:00:00Z".parse().unwrap(),
+                    to: "2026-07-20T00:00:00Z".parse().unwrap(),
+                    before: None,
+                    limit: 10,
+                    session_id: None,
+                    search: Some("pagination".into()),
+                },
+            )
+            .unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].text, "Build the prompt API\nand add pagination");
+        assert_eq!(prompts[0].usage.provider_id, "openai");
+    }
 }

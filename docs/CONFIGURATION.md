@@ -1,8 +1,7 @@
 # Configuration
 
 Agentusage is local-first and uses SQLite by default. This guide covers state
-paths, automatic synchronization, PostgreSQL, telemetry hooks, and operational
-security.
+paths, automatic synchronization, PostgreSQL, and operational security.
 
 ## Configuration file
 
@@ -24,12 +23,6 @@ Provider usage is stored in separate SQLite databases:
 ~/.local/state/agentusage/opencode.db
 ~/.local/state/agentusage/copilot.db
 ~/.local/state/agentusage/pi.db
-```
-
-Telemetry hooks and the daemon use:
-
-```text
-~/.local/state/agentusage/telemetry.db
 ```
 
 Set `XDG_STATE_HOME` to change the state root:
@@ -54,8 +47,7 @@ refresh_seconds = 300
 When enabled, the browser server starts an ingestion loop for every supported
 provider and refreshes at the configured interval.
 
-Report commands perform an incremental sync before querying. Non-spool
-telemetry hooks also synchronize their provider after processing an event.
+Report commands perform an incremental sync before querying.
 
 ## PostgreSQL
 
@@ -72,6 +64,12 @@ The first-run storage prompt can select PostgreSQL. Agentusage does not use an
 
 Treat the connection URL and database contents as sensitive.
 
+This build accepts PostgreSQL Unix sockets and loopback TCP hosts only. Remote
+TCP connections are rejected because the binary does not include a PostgreSQL
+TLS implementation. Dashboard and API connections validate the schema without
+running DDL and set the session to read-only; synchronization opens the writable
+connection and initializes the canonical schema.
+
 ## Pi session directory
 
 Pi sessions are discovered recursively below:
@@ -85,41 +83,6 @@ Override this path with an environment variable or command option:
 ```bash
 PI_CODING_AGENT_SESSION_DIR=/path/to/sessions au sync pi
 au sync pi --sessions-dir /path/to/sessions
-```
-
-## Telemetry hooks
-
-Pass a hook payload positionally:
-
-```bash
-au telemetry hook codex \
-  '{"turn_id":"turn-1","usage":{"input_tokens":10,"output_tokens":4}}' \
-  --verbose
-```
-
-Or pipe JSON through standard input:
-
-```bash
-printf '%s' '{"event":"message","usage":{"input_tokens":10}}' \
-  | au telemetry hook claude_code --verbose
-```
-
-Supported hook sources are `codex`, `claude_code`, and `opencode`.
-
-Useful options:
-
-| Option | Purpose |
-| --- | --- |
-| `--account-id` | Preserve an account dimension |
-| `--db-path` | Use a custom telemetry database |
-| `--spool-only` | Write to the local spool without immediate ingestion |
-| `--verbose` | Print event and deduplication details |
-
-Start the telemetry daemon with:
-
-```bash
-au telemetry daemon
-au telemetry daemon --db-path /path/to/telemetry.db
 ```
 
 ## Server logging
@@ -152,14 +115,17 @@ The HTTP server binds to loopback by default:
 127.0.0.1:8787
 ```
 
-The server currently has no built-in authentication or CORS policy. Do not bind
-it to a public or untrusted network without authentication and access control
-provided by a reverse proxy.
+The server has no built-in authentication or CORS policy and rejects non-loopback
+bind addresses.
 
-## Backups and migration
+## Rebuilding derived storage
 
 Source agent history remains the primary input for normalized provider
 databases. Preserve source history if you expect to rebuild local usage.
 
-When the Pi schema or ingestion format requires a rebuild, Agentusage retains
-the previous derived database as `pi.db.legacy` or a numbered variant.
+Normalized storage carries an explicit schema version. Agentusage does not
+maintain compatibility migrations for obsolete normalized schemas. When an
+obsolete derived SQLite database is detected in an interactive command, choose
+`Rebuild derived SQLite` to replace it and synchronize again from the provider's
+source history. Non-interactive commands report the database that needs to be
+rebuilt.

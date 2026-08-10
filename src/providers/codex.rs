@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::core::TokenSemantics;
 use crate::storage::{IngestRecord, RawEvent, UsageEvent, UsageMetric, UsageStore};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -201,6 +202,24 @@ fn ingest_session<S: UsageStore>(
             continue;
         }
         let Some(occurred_at) = occurred_at else {
+            let payload_kind = first_string(payload, &["type", "event_type", "eventType", "kind"]);
+            if persist
+                && (kind == "event_msg"
+                    && matches!(
+                        payload_kind.as_deref(),
+                        Some(
+                            "user_message"
+                                | "user.message"
+                                | "prompt"
+                                | "token_count"
+                                | "token.count"
+                                | "usage"
+                                | "token_usage"
+                        )
+                    ))
+            {
+                stats.malformed_lines += 1;
+            }
             continue;
         };
         if matches!(
@@ -286,7 +305,7 @@ fn ingest_session<S: UsageStore>(
             if current == Counters::default() {
                 continue;
             }
-            let delta = current.saturating_sub(previous);
+            let delta = current.delta_from(previous);
             previous = current;
             if delta.total <= 0 {
                 continue;
@@ -510,44 +529,54 @@ fn counters(value: &Value) -> Counters {
     let Some(usage) = usage else {
         return Counters::default();
     };
+    let input = number_any(
+        usage,
+        &[
+            "input_tokens",
+            "inputTokens",
+            "prompt_tokens",
+            "promptTokens",
+        ],
+    );
+    let output = number_any(
+        usage,
+        &[
+            "output_tokens",
+            "outputTokens",
+            "completion_tokens",
+            "completionTokens",
+        ],
+    );
+    let reasoning = number_any(
+        usage,
+        &[
+            "reasoning_output_tokens",
+            "reasoning_tokens",
+            "reasoningTokens",
+        ],
+    );
+    let cached = number_any(
+        usage,
+        &[
+            "cached_input_tokens",
+            "cache_read_tokens",
+            "cachedInputTokens",
+            "cacheReadTokens",
+        ],
+    );
+    let cache_write = number_any(usage, &["cache_write_tokens", "cacheWriteTokens"]);
+    let reported_total = number_any(usage, &["total_tokens", "totalTokens", "total"]);
     Counters {
-        input: number_any(
-            usage,
-            &[
-                "input_tokens",
-                "inputTokens",
-                "prompt_tokens",
-                "promptTokens",
-            ],
-        ),
-        output: number_any(
-            usage,
-            &[
-                "output_tokens",
-                "outputTokens",
-                "completion_tokens",
-                "completionTokens",
-            ],
-        ),
-        reasoning: number_any(
-            usage,
-            &[
-                "reasoning_output_tokens",
-                "reasoning_tokens",
-                "reasoningTokens",
-            ],
-        ),
-        cached: number_any(
-            usage,
-            &[
-                "cached_input_tokens",
-                "cache_read_tokens",
-                "cachedInputTokens",
-                "cacheReadTokens",
-            ],
-        ),
-        cache_write: number_any(usage, &["cache_write_tokens", "cacheWriteTokens"]),
-        total: number_any(usage, &["total_tokens", "totalTokens", "total"]),
+        input,
+        output,
+        reasoning,
+        cached,
+        cache_write,
+        total: if reported_total > 0 {
+            reported_total
+        } else {
+            TokenSemantics::OpenAi.total(input, output, reasoning, cached, cache_write)
+        },
     }
 }
 
@@ -596,17 +625,6 @@ fn classify_client(source: Option<&str>, originator: Option<&str>) -> String {
     }
 }
 
-fn add_breakdown(map: &mut BTreeMap<String, TokenBreakdown>, name: String, value: TokenBreakdown) {
-    let entry = map.entry(name).or_default();
-    entry.input += value.input;
-    entry.output += value.output;
-    entry.reasoning += value.reasoning;
-    entry.cache_read += value.cache_read;
-    entry.cache_write += value.cache_write;
-    entry.total += value.total;
-    entry.cost_usd += value.cost_usd;
-}
-
 fn estimate_cost(model: &str, usage: Counters) -> f64 {
     // Codex subscription usage is not an invoice. This is an API-equivalent
     // estimate using the current GPT-5 family rate assumption.
@@ -617,12 +635,6 @@ fn estimate_cost(model: &str, usage: Counters) -> f64 {
     }
     (usage.input as f64 * 1.25 + usage.cached as f64 * 0.125 + usage.output as f64 * 10.0)
         / 1_000_000.0
-}
-
-fn count_patch(input: &str, report: &mut DailyUsage) {
-    let (added, removed) = patch_counts(input);
-    report.lines_added += added;
-    report.lines_removed += removed;
 }
 
 fn count_patch_languages(input: &str, languages: &mut BTreeMap<String, usize>) {
@@ -699,7 +711,10 @@ fn patch_counts(input: &str) -> (i64, i64) {
 }
 
 impl Counters {
-    fn saturating_sub(self, previous: Self) -> Self {
+    fn delta_from(self, previous: Self) -> Self {
+        if self.total < previous.total {
+            return self;
+        }
         Self {
             input: self.input.saturating_sub(previous.input),
             output: self.output.saturating_sub(previous.output),
@@ -711,18 +726,40 @@ impl Counters {
     }
 }
 
-pub fn cache_hit_rate(report: &DailyUsage) -> Option<f64> {
-    let denominator = report.input_tokens + report.cached_input_tokens + report.cache_write_tokens;
-    (denominator > 0 && report.cached_input_tokens > 0)
-        .then(|| report.cached_input_tokens as f64 / denominator as f64 * 100.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
 
-    use crate::storage::{UsageStore, sqlite::SqliteStore};
+    use crate::storage::{PromptQuery, UsageStore, sqlite::SqliteStore};
+
+    #[test]
+    fn retrieves_codex_user_prompts_from_preserved_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        writeln!(file, r#"{{"timestamp":"2026-07-19T05:00:00Z","type":"session_meta","payload":{{"model":"gpt-5"}}}}"#).unwrap();
+        writeln!(file, r#"{{"timestamp":"2026-07-19T05:01:00Z","type":"event_msg","payload":{{"type":"user_message","message":"Show prompts in the dashboard"}}}}"#).unwrap();
+
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        ingest_into_store(Some(dir.path().to_str().unwrap()), &mut store).unwrap();
+        let prompts = store
+            .prompts(
+                "codex",
+                &PromptQuery {
+                    from: "2026-07-19T00:00:00Z".parse().unwrap(),
+                    to: "2026-07-20T00:00:00Z".parse().unwrap(),
+                    before: None,
+                    limit: 10,
+                    session_id: None,
+                    search: Some("dashboard".into()),
+                },
+            )
+            .unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].text, "Show prompts in the dashboard");
+        assert_eq!(prompts[0].usage.model.as_deref(), Some("gpt-5"));
+    }
 
     #[test]
     fn ingests_only_appended_lines_and_keeps_token_deltas() {
@@ -793,5 +830,39 @@ mod tests {
             .unwrap();
         assert_eq!(live_status.total_tokens, 0);
         assert_eq!(live_status.primary_used_percent, Some(42.5));
+    }
+
+    #[test]
+    fn treats_counter_resets_as_a_new_usage_baseline() {
+        let previous = Counters {
+            input: 100,
+            output: 20,
+            reasoning: 10,
+            cached: 60,
+            total: 120,
+            ..Default::default()
+        };
+        let reset = Counters {
+            input: 12,
+            output: 3,
+            reasoning: 2,
+            cached: 8,
+            total: 15,
+            ..Default::default()
+        };
+        assert_eq!(reset.delta_from(previous), reset);
+    }
+
+    #[test]
+    fn rejects_token_usage_without_a_source_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        writeln!(file, r#"{{"timestamp":"2026-07-19T05:00:00Z","type":"session_meta","payload":{{"model":"gpt-5"}}}}"#).unwrap();
+        writeln!(file, r#"{{"type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}}}}}"#).unwrap();
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let stats = ingest_into_store(Some(dir.path().to_str().unwrap()), &mut store).unwrap();
+        assert_eq!(stats.token_records, 0);
+        assert_eq!(stats.malformed_lines, 1);
     }
 }

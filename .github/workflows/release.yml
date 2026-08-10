@@ -67,38 +67,35 @@ jobs:
           import datetime
           import os
           import pathlib
-          import subprocess
 
           path = pathlib.Path("CHANGELOG.md")
           text = path.read_text() if path.exists() else "# Changelog\n\n## [Unreleased]\n"
-          previous = subprocess.run(
-              ["git", "describe", "--tags", "--abbrev=0"],
-              capture_output=True,
-              text=True,
-              check=False,
-          ).stdout.strip()
-          revision_range = f"{previous}..HEAD" if previous else "HEAD"
-          entries = subprocess.run(
-              ["git", "log", revision_range, "--pretty=format:- %s (%h)"],
-              capture_output=True,
-              text=True,
-              check=True,
-          ).stdout.strip() or "- Maintenance release"
+          marker = "## [Unreleased]"
+          placeholder = "Changes that have not been released yet."
+          if marker not in text:
+              raise SystemExit("CHANGELOG.md is missing an Unreleased section")
+          section_start = text.index(marker) + len(marker)
+          next_section = text.find("\n## [", section_start)
+          section_end = len(text) if next_section == -1 else next_section
+          unreleased = text[section_start:section_end].strip()
+          if unreleased.startswith(placeholder):
+              unreleased = unreleased[len(placeholder):].strip()
+          details = unreleased or "- Maintenance release"
           section = (
               f"## [{os.environ['VERSION']}] - "
-              f"{datetime.date.today().isoformat()}\n\n{entries}\n"
+              f"{datetime.date.today().isoformat()}\n\n{details}\n\n"
           )
           release_notes = (
               f"# agentusage {os.environ['VERSION']}\n\n"
-              f"## Changes\n\n{entries}\n"
+              f"{details}\n"
           )
           pathlib.Path("RELEASE_NOTES.md").write_text(release_notes)
-          marker = "## [Unreleased]"
-          if marker in text:
-              insert_at = text.index(marker) + len(marker)
-              text = text[:insert_at] + "\n\n" + section + text[insert_at:]
-          else:
-              text = text.rstrip() + "\n\n" + section
+          prefix = text[:section_start]
+          suffix = text[section_end:].lstrip()
+          text = (
+              f"{prefix}\n\n{placeholder}\n\n{section}"
+              f"{suffix}"
+          )
           path.write_text(text)
           PY
 

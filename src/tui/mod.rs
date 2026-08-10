@@ -18,7 +18,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Sparkline, Wrap},
 };
 
 const PROVIDERS: [&str; 5] = ["codex", "claude_code", "opencode", "copilot", "pi"];
@@ -102,6 +102,9 @@ struct ProviderData {
     primary_used_percent: Option<f64>,
     primary_window_minutes: Option<i64>,
     desktop_signal: Option<(i64, i64)>,
+    trend: Vec<crate::storage::DailyUsagePoint>,
+    events: Vec<crate::storage::UsageEventDetail>,
+    prompt_events: Vec<crate::storage::PromptDetail>,
     error: Option<String>,
 }
 
@@ -191,6 +194,11 @@ struct Dashboard {
     selected: usize,
     detail_focus: bool,
     detail_scroll: u16,
+    selected_event: usize,
+    show_event_detail: bool,
+    selected_prompt: usize,
+    show_prompts: bool,
+    show_prompt_detail: bool,
     refreshing: bool,
     pending: usize,
     generation: u64,
@@ -215,6 +223,11 @@ impl Dashboard {
             selected: 0,
             detail_focus: false,
             detail_scroll: 0,
+            selected_event: 0,
+            show_event_detail: false,
+            selected_prompt: 0,
+            show_prompts: false,
+            show_prompt_detail: false,
             refreshing: false,
             pending: 0,
             generation: 0,
@@ -284,6 +297,10 @@ impl Dashboard {
                         .selected
                         .min(self.snapshot.providers.len().saturating_sub(1));
                     self.detail_scroll = 0;
+                    self.selected_event = 0;
+                    self.show_event_detail = false;
+                    self.selected_prompt = 0;
+                    self.show_prompt_detail = false;
                 }
                 if generation == self.generation {
                     self.pending = self.pending.saturating_sub(1);
@@ -325,7 +342,14 @@ impl Dashboard {
             return true;
         }
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => true,
+            KeyCode::Char('q') => true,
+            KeyCode::Esc if self.detail_focus => {
+                self.detail_focus = false;
+                self.show_event_detail = false;
+                self.show_prompt_detail = false;
+                false
+            }
+            KeyCode::Esc => true,
             KeyCode::Char('r') => {
                 if !self.refreshing {
                     self.last_auto_refresh = Instant::now();
@@ -343,16 +367,53 @@ impl Dashboard {
                 self.refresh(self.tx.clone(), false);
                 false
             }
+            KeyCode::Char('p') if self.detail_focus => {
+                self.show_prompts = !self.show_prompts;
+                self.show_event_detail = false;
+                self.show_prompt_detail = false;
+                self.detail_scroll = 0;
+                false
+            }
+            KeyCode::Enter if self.detail_focus => {
+                if self.show_prompts {
+                    self.show_prompt_detail = !self.show_prompt_detail;
+                } else {
+                    self.show_event_detail = !self.show_event_detail;
+                }
+                false
+            }
             KeyCode::Tab | KeyCode::Enter => {
                 self.detail_focus = !self.detail_focus;
+                self.show_event_detail = false;
+                self.show_prompt_detail = false;
                 false
             }
-            KeyCode::Up if self.detail_focus => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(1);
+            KeyCode::Up | KeyCode::Char('k') if self.detail_focus => {
+                if self.show_prompts {
+                    self.selected_prompt = self.selected_prompt.saturating_sub(1);
+                } else {
+                    self.selected_event = self.selected_event.saturating_sub(1);
+                }
                 false
             }
-            KeyCode::Down if self.detail_focus => {
-                self.detail_scroll = self.detail_scroll.saturating_add(1);
+            KeyCode::Down | KeyCode::Char('j') if self.detail_focus => {
+                if let Some(provider) = self.snapshot.providers.get(self.selected) {
+                    if self.show_prompts && !provider.prompt_events.is_empty() {
+                        self.selected_prompt =
+                            (self.selected_prompt + 1).min(provider.prompt_events.len() - 1);
+                    } else if !self.show_prompts && !provider.events.is_empty() {
+                        self.selected_event =
+                            (self.selected_event + 1).min(provider.events.len() - 1);
+                    }
+                }
+                false
+            }
+            KeyCode::PageUp if self.detail_focus => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(5);
+                false
+            }
+            KeyCode::PageDown if self.detail_focus => {
+                self.detail_scroll = self.detail_scroll.saturating_add(5);
                 false
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -408,8 +469,16 @@ impl Dashboard {
             self.render_grid(frame, chunks[1]);
         }
         frame.render_widget(
-            Paragraph::new("↑↓/jk select · Enter/Tab detail · w window · r refresh · q quit")
-                .style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(if self.detail_focus {
+                if self.show_prompts {
+                    "↑↓/jk prompt · Enter expand · p requests · PgUp/PgDn scroll · Tab/Esc back · q quit"
+                } else {
+                    "↑↓/jk request · Enter inspect · p prompts · PgUp/PgDn scroll · Tab/Esc back · q quit"
+                }
+            } else {
+                "↑↓/jk select · Enter/Tab detail · w window · r refresh · q quit"
+            })
+            .style(Style::default().fg(Color::DarkGray)),
             chunks[2],
         );
     }
@@ -463,49 +532,70 @@ impl Dashboard {
                 .add_modifier(Modifier::BOLD),
         )));
         let inner_width = area.width.saturating_sub(2);
+        let compact_layout = inner_width < 96;
         lines.push(Line::from("─".repeat(inner_width as usize)));
         lines.push(section_line("⚡ Usage", Color::Yellow, inner_width));
-        let usage_widths = [16, 26, 16, 26];
-        lines.push(table_border(&usage_widths, '┌', '┬', '┐'));
-        lines.push(table_header_row(
-            &["metric", "value", "metric", "value"].map(str::to_owned),
-            &usage_widths,
-            &[false, false, false, false],
-        ));
-        lines.push(table_border(&usage_widths, '├', '┼', '┤'));
-        for cells in [
-            vec![
-                "status".to_owned(),
-                usage_status(provider),
-                "window".to_owned(),
-                usage_window(provider),
-            ],
-            vec![
-                "volume".to_owned(),
-                format!("{} tok", compact(provider.total_tokens)),
-                "requests".to_owned(),
-                provider.requests.to_string(),
-            ],
-            vec![
-                "token records".to_owned(),
-                provider.token_records.to_string(),
-                "prompts".to_owned(),
-                provider.prompts.to_string(),
-            ],
-            vec![
-                "code changes".to_owned(),
-                format!("+{} / -{}", provider.lines_added, provider.lines_removed),
-                "".to_owned(),
-                "".to_owned(),
-            ],
-        ] {
-            lines.push(table_row(
-                &cells,
+        if compact_layout {
+            lines.extend([
+                Line::from(format!(
+                    "status {} · window {}",
+                    usage_status(provider),
+                    usage_window(provider)
+                )),
+                Line::from(format!(
+                    "volume {} tok · requests {} · prompts {}",
+                    compact(provider.total_tokens),
+                    provider.requests,
+                    provider.prompts
+                )),
+                Line::from(format!(
+                    "token records {} · changes +{} / -{}",
+                    provider.token_records, provider.lines_added, provider.lines_removed
+                )),
+            ]);
+        } else {
+            let usage_widths = [16, 26, 16, 26];
+            lines.push(table_border(&usage_widths, '┌', '┬', '┐'));
+            lines.push(table_header_row(
+                &["metric", "value", "metric", "value"].map(str::to_owned),
                 &usage_widths,
                 &[false, false, false, false],
             ));
+            lines.push(table_border(&usage_widths, '├', '┼', '┤'));
+            for cells in [
+                vec![
+                    "status".to_owned(),
+                    usage_status(provider),
+                    "window".to_owned(),
+                    usage_window(provider),
+                ],
+                vec![
+                    "volume".to_owned(),
+                    format!("{} tok", compact(provider.total_tokens)),
+                    "requests".to_owned(),
+                    provider.requests.to_string(),
+                ],
+                vec![
+                    "token records".to_owned(),
+                    provider.token_records.to_string(),
+                    "prompts".to_owned(),
+                    provider.prompts.to_string(),
+                ],
+                vec![
+                    "code changes".to_owned(),
+                    format!("+{} / -{}", provider.lines_added, provider.lines_removed),
+                    "".to_owned(),
+                    "".to_owned(),
+                ],
+            ] {
+                lines.push(table_row(
+                    &cells,
+                    &usage_widths,
+                    &[false, false, false, false],
+                ));
+            }
+            lines.push(table_border(&usage_widths, '└', '┴', '┘'));
         }
-        lines.push(table_border(&usage_widths, '└', '┴', '┘'));
         lines.push(Line::from("Quota remaining"));
         lines.push(rate_limit_bar(
             provider.primary_used_percent,
@@ -570,6 +660,31 @@ impl Dashboard {
                 "  No model data for this time range",
                 Style::default().fg(Color::DarkGray),
             )));
+        } else if compact_layout {
+            for (rank, model) in provider.models.iter().enumerate() {
+                lines.push(Line::from(format!(
+                    "{:>2}. {} · {} tok · ${:.5}",
+                    rank + 1,
+                    truncate(&model.name, inner_width.saturating_sub(29) as usize),
+                    compact(model.total_tokens),
+                    model.cost_usd
+                )));
+                lines.push(Line::from(format!(
+                    "    in {} · out {} · cache r/w {}/{}",
+                    compact(model.input_tokens),
+                    compact(model.output_tokens),
+                    compact(model.cache_read_tokens),
+                    compact(model.cache_write_tokens)
+                )));
+            }
+            lines.push(Line::from(format!(
+                "breakdown in {} · out {} · cache {} · reason {} · total {}",
+                compact(provider.input_tokens),
+                compact(provider.output_tokens),
+                compact(provider.cache_read_tokens),
+                compact(provider.reasoning_tokens),
+                compact(provider.total_tokens)
+            )));
         } else {
             let longest_model = provider
                 .models
@@ -582,9 +697,9 @@ impl Dashboard {
             // long names remain visible whenever the terminal can accommodate
             // them.
             let model_width = longest_model
-                .min(inner_width.saturating_sub(68) as usize)
+                .min(inner_width.saturating_sub(80) as usize)
                 .max(20);
-            let widths = [3, model_width, 12, 12, 14, 14, 12];
+            let widths = [3, model_width, 12, 12, 14, 14, 12, 12];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
             lines.push(table_header_row(
                 &[
@@ -595,10 +710,11 @@ impl Dashboard {
                     "cache_read",
                     "cache_write",
                     "total",
+                    "cost",
                 ]
                 .map(str::to_owned),
                 &widths,
-                &[true, false, true, true, true, true, true],
+                &[true, false, true, true, true, true, true, true],
             ));
             lines.push(table_border(&widths, '├', '┼', '┤'));
             for (rank, model) in provider.models.iter().enumerate() {
@@ -611,9 +727,10 @@ impl Dashboard {
                         compact(model.cache_read_tokens),
                         compact(model.cache_write_tokens),
                         compact(model.total_tokens),
+                        format!("${:.5}", model.cost_usd),
                     ],
                     &widths,
-                    &[true, false, true, true, true, true, true],
+                    &[true, false, true, true, true, true, true, true],
                 ));
             }
             lines.push(table_border(&widths, '└', '┴', '┘'));
@@ -772,54 +889,340 @@ impl Dashboard {
             lines.push(table_border(&widths, '└', '┴', '┘'));
         }
         lines.push(Line::from(""));
+        if self.show_prompts {
+            lines.push(section_line(
+                "Recent Prompts",
+                Color::Rgb(142, 209, 197),
+                inner_width,
+            ));
+            if provider.prompt_events.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  No retrievable user prompts for this time range",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else if inner_width >= 90 {
+                let widths = [3, 19, 20, 42];
+                lines.push(table_border(&widths, '┌', '┬', '┐'));
+                lines.push(table_header_row(
+                    &["#", "timestamp", "model", "prompt"].map(str::to_owned),
+                    &widths,
+                    &[true, false, false, false],
+                ));
+                lines.push(table_border(&widths, '├', '┼', '┤'));
+                for (index, prompt) in provider.prompt_events.iter().enumerate() {
+                    let row = table_row(
+                        &[
+                            (index + 1).to_string(),
+                            prompt
+                                .usage
+                                .occurred_at
+                                .with_timezone(&Local)
+                                .format("%Y-%m-%d %H:%M:%S")
+                                .to_string(),
+                            truncate(prompt.usage.model.as_deref().unwrap_or("unknown"), 20),
+                            truncate(&single_line(&prompt.text), 42),
+                        ],
+                        &widths,
+                        &[true, false, false, false],
+                    );
+                    lines.push(if index == self.selected_prompt {
+                        row.style(
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        row
+                    });
+                }
+                lines.push(table_border(&widths, '└', '┴', '┘'));
+            } else {
+                for (index, prompt) in provider.prompt_events.iter().enumerate() {
+                    let line = Line::from(format!(
+                        "{} {} · {} · {}",
+                        if index == self.selected_prompt {
+                            ">"
+                        } else {
+                            " "
+                        },
+                        prompt
+                            .usage
+                            .occurred_at
+                            .with_timezone(&Local)
+                            .format("%m-%d %H:%M"),
+                        truncate(prompt.usage.model.as_deref().unwrap_or("unknown"), 18),
+                        truncate(
+                            &single_line(&prompt.text),
+                            inner_width.saturating_sub(36) as usize
+                        ),
+                    ));
+                    lines.push(if index == self.selected_prompt {
+                        line.style(Style::default().fg(Color::Yellow))
+                    } else {
+                        line
+                    });
+                }
+            }
+            if self.show_prompt_detail
+                && let Some(prompt) = provider.prompt_events.get(self.selected_prompt)
+            {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Selected prompt",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for value in [
+                    format!("prompt id      {}", prompt.usage.event_id),
+                    format!(
+                        "timestamp      {} local / {} UTC",
+                        prompt
+                            .usage
+                            .occurred_at
+                            .with_timezone(&Local)
+                            .format("%Y-%m-%d %H:%M:%S %Z"),
+                        prompt.usage.occurred_at.format("%Y-%m-%d %H:%M:%S")
+                    ),
+                    format!(
+                        "session        {}",
+                        prompt.usage.session_id.as_deref().unwrap_or("unavailable")
+                    ),
+                    format!(
+                        "model/project  {} / {}",
+                        prompt.usage.model.as_deref().unwrap_or("unknown"),
+                        prompt.usage.project.as_deref().unwrap_or("unavailable")
+                    ),
+                    format!(
+                        "source         {} / {}",
+                        prompt.source_system, prompt.source_channel
+                    ),
+                    format!(
+                        "source locator {}",
+                        prompt.source_locator.as_deref().unwrap_or("unavailable")
+                    ),
+                ] {
+                    lines.push(Line::from(value));
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Prompt text",
+                    Style::default().fg(Color::Rgb(142, 209, 197)),
+                )));
+                lines.extend(
+                    prompt
+                        .text
+                        .lines()
+                        .map(|line| Line::from(format!("  {line}"))),
+                );
+            }
+        } else {
+            lines.push(section_line(
+                "Recent Requests",
+                Color::Rgb(130, 180, 255),
+                inner_width,
+            ));
+            if provider.events.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  No request events for this time range",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else if inner_width >= 90 {
+                let widths = [3, 19, 28, 12, 14];
+                lines.push(table_border(&widths, '┌', '┬', '┐'));
+                lines.push(table_header_row(
+                    &["#", "timestamp", "model", "status", "tokens"].map(str::to_owned),
+                    &widths,
+                    &[true, false, false, false, true],
+                ));
+                lines.push(table_border(&widths, '├', '┼', '┤'));
+                for (index, event) in provider.events.iter().enumerate() {
+                    let row = table_row(
+                        &[
+                            (index + 1).to_string(),
+                            event
+                                .usage
+                                .occurred_at
+                                .with_timezone(&Local)
+                                .format("%Y-%m-%d %H:%M:%S")
+                                .to_string(),
+                            truncate(event.usage.model.as_deref().unwrap_or("unknown"), 28),
+                            truncate(&event.status, 12),
+                            compact(event.usage.total_tokens),
+                        ],
+                        &widths,
+                        &[true, false, false, false, true],
+                    );
+                    lines.push(if index == self.selected_event {
+                        row.style(
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        row
+                    });
+                }
+                lines.push(table_border(&widths, '└', '┴', '┘'));
+            } else {
+                for (index, event) in provider.events.iter().enumerate() {
+                    let line = Line::from(format!(
+                        "{} {} · {} · {} · {} tok",
+                        if index == self.selected_event {
+                            ">"
+                        } else {
+                            " "
+                        },
+                        event
+                            .usage
+                            .occurred_at
+                            .with_timezone(&Local)
+                            .format("%m-%d %H:%M"),
+                        truncate(event.usage.model.as_deref().unwrap_or("unknown"), 22),
+                        truncate(&event.status, 10),
+                        compact(event.usage.total_tokens),
+                    ));
+                    lines.push(if index == self.selected_event {
+                        line.style(Style::default().fg(Color::Yellow))
+                    } else {
+                        line
+                    });
+                }
+            }
+            if self.show_event_detail
+                && let Some(event) = provider.events.get(self.selected_event)
+            {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Selected request",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for value in [
+                    format!("event id       {}", event.usage.event_id),
+                    format!(
+                        "timestamp      {} local / {} UTC",
+                        event
+                            .usage
+                            .occurred_at
+                            .with_timezone(&Local)
+                            .format("%Y-%m-%d %H:%M:%S %Z"),
+                        event.usage.occurred_at.format("%Y-%m-%d %H:%M:%S")
+                    ),
+                    format!(
+                        "request id     {}",
+                        event.source_request_id.as_deref().unwrap_or("unavailable")
+                    ),
+                    format!(
+                        "session        {}",
+                        event.usage.session_id.as_deref().unwrap_or("unavailable")
+                    ),
+                    format!(
+                        "model / status {} / {}",
+                        event.usage.model.as_deref().unwrap_or("unknown"),
+                        event.status
+                    ),
+                    format!(
+                        "client/project {} / {}",
+                        event.usage.client.as_deref().unwrap_or("unavailable"),
+                        event.usage.project.as_deref().unwrap_or("unavailable")
+                    ),
+                    format!(
+                        "source         {} / {}",
+                        event.source_system, event.source_channel
+                    ),
+                    format!(
+                        "source locator {}",
+                        event.source_locator.as_deref().unwrap_or("unavailable")
+                    ),
+                    format!("total source   {}", event.total_source),
+                    format!(
+                        "duration        {}",
+                        event
+                            .duration_ms
+                            .map(|value| format!("{value} ms"))
+                            .unwrap_or_else(|| "unavailable".into())
+                    ),
+                    format!(
+                        "tokens          in={} out={} reason={} cache-read={} cache-write={} total={}",
+                        event.usage.input_tokens,
+                        event.usage.output_tokens,
+                        event.usage.reasoning_tokens,
+                        event.usage.cache_read_tokens,
+                        event.usage.cache_write_tokens,
+                        event.usage.total_tokens,
+                    ),
+                    format!("cost            ${:.6}", event.usage.cost_usd),
+                ] {
+                    lines.push(Line::from(value));
+                }
+            }
+        }
+        lines.push(Line::from(""));
         lines.push(section_line("Other Data", Color::DarkGray, inner_width));
-        let other_widths = [20, 18, 20, 18];
-        lines.push(table_border(&other_widths, '┌', '┬', '┐'));
-        lines.push(table_header_row(
-            &["metric", "value", "metric", "value"].map(str::to_owned),
-            &other_widths,
-            &[false, false, false, false],
-        ));
-        lines.push(table_border(&other_widths, '├', '┼', '┤'));
-        for cells in [
-            vec![
-                "today messages".to_owned(),
-                provider.prompts.to_string(),
-                "input tokens".to_owned(),
-                compact(provider.input_tokens),
-            ],
-            vec![
-                "window requests".to_owned(),
-                provider.requests.to_string(),
-                "output tokens".to_owned(),
-                compact(provider.output_tokens),
-            ],
-            vec![
-                "window tokens".to_owned(),
-                compact(provider.total_tokens),
-                "cache writes".to_owned(),
-                compact(provider.cache_write_tokens),
-            ],
-            vec![
-                "files scanned".to_owned(),
-                provider.files_scanned.to_string(),
-                "usage files".to_owned(),
-                provider.files_with_usage.to_string(),
-            ],
-            vec![
-                "token records".to_owned(),
-                provider.token_records.to_string(),
-                "malformed lines".to_owned(),
-                provider.malformed_lines.to_string(),
-            ],
-        ] {
-            lines.push(table_row(
-                &cells,
+        if compact_layout {
+            lines.extend([
+                Line::from(format!(
+                    "messages {} · requests {} · tokens {}",
+                    provider.prompts,
+                    provider.requests,
+                    compact(provider.total_tokens)
+                )),
+                Line::from(format!(
+                    "files {} scanned / {} with usage · malformed {}",
+                    provider.files_scanned, provider.files_with_usage, provider.malformed_lines
+                )),
+            ]);
+        } else {
+            let other_widths = [20, 18, 20, 18];
+            lines.push(table_border(&other_widths, '┌', '┬', '┐'));
+            lines.push(table_header_row(
+                &["metric", "value", "metric", "value"].map(str::to_owned),
                 &other_widths,
                 &[false, false, false, false],
             ));
+            lines.push(table_border(&other_widths, '├', '┼', '┤'));
+            for cells in [
+                vec![
+                    "today messages".to_owned(),
+                    provider.prompts.to_string(),
+                    "input tokens".to_owned(),
+                    compact(provider.input_tokens),
+                ],
+                vec![
+                    "window requests".to_owned(),
+                    provider.requests.to_string(),
+                    "output tokens".to_owned(),
+                    compact(provider.output_tokens),
+                ],
+                vec![
+                    "window tokens".to_owned(),
+                    compact(provider.total_tokens),
+                    "cache writes".to_owned(),
+                    compact(provider.cache_write_tokens),
+                ],
+                vec![
+                    "files scanned".to_owned(),
+                    provider.files_scanned.to_string(),
+                    "usage files".to_owned(),
+                    provider.files_with_usage.to_string(),
+                ],
+                vec![
+                    "token records".to_owned(),
+                    provider.token_records.to_string(),
+                    "malformed lines".to_owned(),
+                    provider.malformed_lines.to_string(),
+                ],
+            ] {
+                lines.push(table_row(
+                    &cells,
+                    &other_widths,
+                    &[false, false, false, false],
+                ));
+            }
+            lines.push(table_border(&other_widths, '└', '┴', '┘'));
         }
-        lines.push(table_border(&other_widths, '└', '┴', '┘'));
         lines.push(Line::from(""));
         lines.push(section_line("⏰ Timers", Color::Red, inner_width));
         if let Some((five, seven)) = provider.desktop_signal {
@@ -833,6 +1236,39 @@ impl Dashboard {
                 Style::default().fg(Color::DarkGray),
             )));
         }
+        let show_trend = !provider.trend.is_empty() && area.height >= 10;
+        let (trend_area, body_area) = if show_trend {
+            let areas = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(5), Constraint::Min(5)])
+                .split(area);
+            (Some(areas[0]), areas[1])
+        } else {
+            (None, area)
+        };
+        if let Some(trend_area) = trend_area {
+            let data: Vec<u64> = provider
+                .trend
+                .iter()
+                .map(|point| point.total_tokens.max(0) as u64)
+                .collect();
+            frame.render_widget(
+                Sparkline::default()
+                    .data(&data)
+                    .style(Style::default().fg(color))
+                    .block(
+                        Block::default()
+                            .title(format!(
+                                " Daily token trend · {} to {} ",
+                                provider.trend.first().map(|point| point.date).unwrap(),
+                                provider.trend.last().map(|point| point.date).unwrap()
+                            ))
+                            .borders(Borders::ALL)
+                            .border_style(color),
+                    ),
+                trend_area,
+            );
+        }
         frame.render_widget(
             Paragraph::new(lines)
                 .scroll((self.detail_scroll, 0))
@@ -843,7 +1279,7 @@ impl Dashboard {
                         .borders(Borders::ALL)
                         .border_style(color),
                 ),
-            area,
+            body_area,
         );
     }
 
@@ -978,239 +1414,6 @@ impl Dashboard {
             area,
         );
     }
-
-    fn total_tokens(&self) -> i64 {
-        self.snapshot
-            .providers
-            .iter()
-            .filter(|provider| !provider.loading && provider.error.is_none())
-            .map(|provider| provider.total_tokens)
-            .sum()
-    }
-
-    fn render_wide(&self, frame: &mut Frame, area: Rect) {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
-            .split(area);
-        self.render_tiles(frame, cols[0]);
-        self.render_detail(frame, cols[1]);
-    }
-
-    fn render_narrow(&self, frame: &mut Frame, area: Rect) {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(
-                    (self.snapshot.providers.len() as u16 * 5)
-                        .max(5)
-                        .min(area.height.saturating_sub(8)),
-                ),
-                Constraint::Min(5),
-            ])
-            .split(area);
-        self.render_tiles(frame, rows[0]);
-        self.render_detail(frame, rows[1]);
-    }
-
-    fn render_tiles(&self, frame: &mut Frame, area: Rect) {
-        let items: Vec<ListItem> = if self.snapshot.providers.is_empty() {
-            vec![ListItem::new("Loading provider data…")]
-        } else {
-            self.snapshot
-                .providers
-                .iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    let title = if i == self.selected {
-                        format!("> {}", p.name)
-                    } else {
-                        format!("  {}", p.name)
-                    };
-                    let body = if p.loading {
-                        "  loading provider data…".to_owned()
-                    } else if let Some(error) = &p.error {
-                        format!("  unavailable: {}", error)
-                    } else {
-                        format!(
-                            "  {:>8} tokens · {:>4} req · ${:.4}",
-                            compact(p.total_tokens),
-                            p.requests,
-                            p.cost_usd
-                        )
-                    };
-                    ListItem::new(vec![
-                        Line::from(Span::styled(
-                            title,
-                            if i == self.selected {
-                                Style::default()
-                                    .fg(Color::Yellow)
-                                    .add_modifier(Modifier::BOLD)
-                            } else {
-                                Style::default().fg(Color::Cyan)
-                            },
-                        )),
-                        Line::from(body),
-                        Line::from(format!(
-                            "  sessions {} · +{} -{}",
-                            p.sessions, p.lines_added, p.lines_removed
-                        )),
-                        Line::from(""),
-                    ])
-                })
-                .collect()
-        };
-        frame.render_widget(
-            List::new(items).block(Block::default().title(" Providers ").borders(Borders::ALL)),
-            area,
-        );
-    }
-
-    fn render_detail(&self, frame: &mut Frame, area: Rect) {
-        let Some(p) = self.snapshot.providers.get(self.selected) else {
-            frame.render_widget(
-                Paragraph::new("No provider data yet")
-                    .block(Block::default().title(" Details ").borders(Borders::ALL)),
-                area,
-            );
-            return;
-        };
-        if p.loading {
-            frame.render_widget(
-                Paragraph::new(format!("{}\n\nLoading provider data…", p.name))
-                    .block(Block::default().title(" Details ").borders(Borders::ALL)),
-                area,
-            );
-            return;
-        }
-        if let Some(error) = &p.error {
-            frame.render_widget(
-                Paragraph::new(format!("{}\n\n{}", p.name, error))
-                    .block(Block::default().title(" Details ").borders(Borders::ALL)),
-                area,
-            );
-            return;
-        }
-        let cache = if p.input_tokens + p.cache_read_tokens + p.cache_write_tokens > 0 {
-            format!(
-                "{:.2}%",
-                p.cache_read_tokens as f64
-                    / (p.input_tokens + p.cache_read_tokens + p.cache_write_tokens) as f64
-                    * 100.0
-            )
-        } else {
-            "n/a".into()
-        };
-        let mut lines = vec![
-            Line::from(Span::styled(
-                format!("{} · {}", p.name, self.snapshot.window.label()),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(format!(
-                "requests {}   prompts {}   sessions {}",
-                p.requests, p.prompts, p.sessions
-            )),
-            Line::from(format!(
-                "tokens {}   input {}   output {}   reasoning {}",
-                compact(p.total_tokens),
-                compact(p.input_tokens),
-                compact(p.output_tokens),
-                compact(p.reasoning_tokens)
-            )),
-            Line::from(format!(
-                "cache hit {}   cost ${:.6}   credits {:.4}",
-                cache, p.cost_usd, p.ai_credits
-            )),
-            Line::from(format!("lines +{} / -{}", p.lines_added, p.lines_removed)),
-            Line::from(""),
-            Line::from("Top models"),
-        ];
-        for model in p.models.iter().take(3) {
-            lines.push(Line::from(format!(
-                "  {:<28} {:>10}  ${:.5}",
-                model.name,
-                compact(model.total_tokens),
-                model.cost_usd
-            )));
-        }
-        lines.push(Line::from(""));
-        lines.push(Line::from("Clients"));
-        for (name, tokens, cost) in p.clients.iter().take(3) {
-            lines.push(Line::from(format!(
-                "  {:<28} {:>10}  ${:.5}",
-                name,
-                compact(*tokens),
-                cost
-            )));
-        }
-        lines.push(Line::from(""));
-        lines.push(Line::from("Projects"));
-        if p.projects.is_empty() {
-            lines.push(Line::from("  No project data for this time range"));
-        } else {
-            for (rank, (name, tokens, cost)) in p.projects.iter().take(5).enumerate() {
-                lines.push(Line::from(format!(
-                    "  {:>2}  {:<24} {:>10}  ${:.5}",
-                    rank + 1,
-                    truncate(name, 24),
-                    compact(*tokens),
-                    cost
-                )));
-            }
-        }
-        lines.push(Line::from(""));
-        lines.push(Line::from("Tool Usage"));
-        if p.tools.is_empty() {
-            lines.push(Line::from("  No tool data for this time range"));
-        } else {
-            for (rank, (name, calls)) in p.tools.iter().take(6).enumerate() {
-                lines.push(Line::from(format!(
-                    "  {:>2}  {:<24} {:>8} calls",
-                    rank + 1,
-                    truncate(name, 24),
-                    calls
-                )));
-            }
-        }
-        lines.push(Line::from(""));
-        lines.push(Line::from("Language"));
-        if p.languages.is_empty() {
-            lines.push(Line::from("  No language data for this time range"));
-        } else {
-            let total: usize = p.languages.iter().map(|(_, count)| *count).sum();
-            for (name, count) in p.languages.iter().take(6) {
-                lines.push(Line::from(format!(
-                    "  {:<24} {:>5.1}% {:>6} req",
-                    truncate(name, 24),
-                    *count as f64 / total.max(1) as f64 * 100.0,
-                    count
-                )));
-            }
-        }
-        if let Some((five, seven)) = p.desktop_signal {
-            lines.push(Line::from(format!(
-                "\nClaude desktop signals: 5h {} · 7d {}",
-                five, seven
-            )));
-        }
-        frame.render_widget(
-            Paragraph::new(lines)
-                .scroll((self.detail_scroll, 0))
-                .wrap(Wrap { trim: false })
-                .block(
-                    Block::default()
-                        .title(if self.detail_focus {
-                            " Details [focused] "
-                        } else {
-                            " Details "
-                        })
-                        .borders(Borders::ALL),
-                ),
-            area,
-        );
-    }
 }
 
 fn load_provider(
@@ -1226,6 +1429,7 @@ fn load_provider(
     match crate::report_for_period(name, start, end, backend) {
         Ok(report) => {
             let spending_by_window = load_spending_windows(name, backend);
+            let (trend, events, prompt_events) = load_activity(name, start, end, backend);
             let rate_limit = if ingest {
                 let cached = load_cached_provider(name, start, end, backend);
                 (cached.primary_used_percent, cached.primary_window_minutes)
@@ -1295,6 +1499,9 @@ fn load_provider(
                 primary_used_percent: rate_limit.0,
                 primary_window_minutes: rate_limit.1,
                 desktop_signal: None,
+                trend,
+                events,
+                prompt_events,
                 ..Default::default()
             }
         }
@@ -1315,13 +1522,12 @@ fn load_cached_provider(
 ) -> ProviderData {
     let from = crate::local_midnight_utc(start);
     let to = crate::local_midnight_utc(end + ChronoDuration::days(1));
-    let result =
-        crate::storage::Backend::open_read_only_for_agent(backend, name).and_then(|mut store| {
-            store.quick_summary_for_agent(crate::agent_name_for_report(name), from, to)
-        });
+    let result = crate::storage::Backend::open_read_only_for_agent(backend, name)
+        .and_then(|mut store| store.agent_summary(crate::agent_name_for_report(name), from, to));
     match result {
         Ok(summary) => {
             let spending_by_window = load_spending_windows(name, backend);
+            let (trend, events, prompt_events) = load_activity(name, start, end, backend);
             let mut models: Vec<_> = summary
                 .models
                 .into_iter()
@@ -1389,6 +1595,9 @@ fn load_cached_provider(
                 primary_used_percent: summary.primary_used_percent,
                 primary_window_minutes: summary.primary_window_minutes,
                 desktop_signal: None,
+                trend,
+                events,
+                prompt_events,
                 ..Default::default()
             }
         }
@@ -1411,10 +1620,59 @@ fn load_spending_windows(name: &str, backend: crate::storage::BackendMode) -> [f
         let from = crate::local_midnight_utc(start);
         let to = crate::local_midnight_utc(end + ChronoDuration::days(1));
         store
-            .quick_summary_for_agent(agent, from, to)
+            .agent_summary(agent, from, to)
             .map(|summary| summary.cost_usd)
             .unwrap_or_default()
     })
+}
+
+fn load_activity(
+    name: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+    backend: crate::storage::BackendMode,
+) -> (
+    Vec<crate::storage::DailyUsagePoint>,
+    Vec<crate::storage::UsageEventDetail>,
+    Vec<crate::storage::PromptDetail>,
+) {
+    let Ok(mut store) = crate::storage::Backend::open_read_only_for_agent(backend, name) else {
+        return (Vec::new(), Vec::new(), Vec::new());
+    };
+    let from = crate::local_midnight_utc(start);
+    let to = crate::local_midnight_utc(end + ChronoDuration::days(1));
+    let agent = crate::agent_name_for_report(name);
+    let trend = store
+        .daily_trend_for_agent(agent, from, to)
+        .unwrap_or_default();
+    let events = store
+        .usage_events(
+            agent,
+            &crate::storage::UsageEventQuery {
+                from,
+                to,
+                before: None,
+                limit: 25,
+                model: None,
+                session_id: None,
+                status: None,
+            },
+        )
+        .unwrap_or_default();
+    let prompts = store
+        .prompts(
+            agent,
+            &crate::storage::PromptQuery {
+                from,
+                to,
+                before: None,
+                limit: 25,
+                session_id: None,
+                search: None,
+            },
+        )
+        .unwrap_or_default();
+    (trend, events, prompts)
 }
 
 fn compact(value: i64) -> String {
@@ -1514,9 +1772,11 @@ fn aligned_header(left: &str, right: &str, width: u16) -> String {
 }
 
 fn cache_rate(provider: &ProviderData) -> Option<f64> {
-    let denominator =
-        provider.input_tokens + provider.cache_read_tokens + provider.cache_write_tokens;
-    (denominator > 0).then(|| provider.cache_read_tokens as f64 / denominator as f64 * 100.0)
+    crate::core::token_semantics_for_agent(&provider.name).cache_hit_rate(
+        provider.input_tokens,
+        provider.cache_read_tokens,
+        provider.cache_write_tokens,
+    )
 }
 
 fn usage_status(provider: &ProviderData) -> String {
@@ -1581,9 +1841,15 @@ fn truncate(value: &str, max: usize) -> String {
         + "…"
 }
 
+fn single_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
+    use ratatui::{Terminal, backend::TestBackend};
     #[test]
     fn window_cycles() {
         assert_eq!(Window::Today.next(), Window::SevenDays);
@@ -1603,5 +1869,65 @@ mod tests {
         ];
         rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         assert_eq!(rows[0].0, "large");
+    }
+
+    #[test]
+    fn renders_grid_and_detail_at_common_terminal_sizes() {
+        for (width, height) in [(80, 24), (120, 40)] {
+            let backend = TestBackend::new(width, height);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut dashboard = Dashboard::new(
+                Vec::new(),
+                crate::config::AppConfig {
+                    auto_sync: false,
+                    refresh_interval: Duration::from_secs(300),
+                },
+            );
+            let occurred_at = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+            dashboard.snapshot.providers = vec![ProviderData {
+                name: "codex".into(),
+                requests: 1,
+                sessions: 1,
+                input_tokens: 100,
+                output_tokens: 20,
+                cache_read_tokens: 60,
+                total_tokens: 120,
+                trend: vec![crate::storage::DailyUsagePoint {
+                    date: occurred_at.date_naive(),
+                    total_tokens: 120,
+                    ..Default::default()
+                }],
+                events: vec![crate::storage::UsageEventDetail {
+                    usage: crate::storage::UsageEvent {
+                        event_id: "event-1".into(),
+                        occurred_at,
+                        provider_id: "codex".into(),
+                        agent_name: "codex".into(),
+                        model: Some("gpt-5".into()),
+                        input_tokens: 100,
+                        output_tokens: 20,
+                        total_tokens: 120,
+                        ..Default::default()
+                    },
+                    source_system: "codex".into(),
+                    source_channel: "jsonl".into(),
+                    source_request_id: Some("request-1".into()),
+                    status: "completed".into(),
+                    duration_ms: Some(42),
+                    source_locator: None,
+                    total_source: "provider_reported".into(),
+                    raw_payload: None,
+                }],
+                ..Default::default()
+            }];
+            terminal.draw(|frame| dashboard.render(frame)).unwrap();
+            dashboard.detail_focus = true;
+            terminal.draw(|frame| dashboard.render(frame)).unwrap();
+            let rendered = terminal.backend().buffer().content().iter().any(|cell| {
+                let symbol = cell.symbol();
+                symbol == "a" || symbol == "D"
+            });
+            assert!(rendered);
+        }
     }
 }
