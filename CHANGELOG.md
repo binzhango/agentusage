@@ -6,6 +6,12 @@ The release workflow updates this file automatically when `main` is released.
 
 ## [Unreleased]
 
+Changes that have not been released yet.
+
+## [1.4.0] - 2026-08-10
+
+- Maintenance release
+
 ## [1.3.0] - 2026-07-23
 
 - Merge pull request #13 from binzhango/feature_browser (5ece9e8)
