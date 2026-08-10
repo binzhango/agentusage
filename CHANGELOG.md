@@ -50,6 +50,12 @@ Changes that have not been released yet.
 - Local agent instruction files are excluded from crates.io packages and
   release package verification.
 
+### Fixed
+
+- PostgreSQL summary buckets now cast `SUM(BIGINT)` results back to `BIGINT`,
+  preventing model, provider, and client aggregates from failing Rust `i64`
+  deserialization in PostgreSQL-backed dashboards and reports.
+
 ### Removed
 
 - Removed the unfinished telemetry hook/daemon surface and obsolete command and
