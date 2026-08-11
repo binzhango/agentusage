@@ -8,6 +8,8 @@ The release workflow updates this file automatically when `main` is released.
 
 Changes that have not been released yet.
 
+## [1.5.0] - 2026-08-11
+
 ### Fixed
 
 - PostgreSQL summary buckets now cast `SUM(BIGINT)` results back to `BIGINT`,
