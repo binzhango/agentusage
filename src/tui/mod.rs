@@ -343,7 +343,17 @@ impl Dashboard {
         }
         match key.code {
             KeyCode::Char('q') => true,
-            KeyCode::Esc if self.detail_focus => {
+            KeyCode::Esc | KeyCode::Backspace if self.show_prompt_detail => {
+                self.show_prompt_detail = false;
+                self.detail_scroll = 0;
+                false
+            }
+            KeyCode::Esc | KeyCode::Backspace if self.show_prompts => {
+                self.show_prompts = false;
+                self.detail_scroll = 0;
+                false
+            }
+            KeyCode::Esc | KeyCode::Backspace if self.detail_focus => {
                 self.detail_focus = false;
                 self.show_event_detail = false;
                 self.show_prompt_detail = false;
@@ -2135,6 +2145,13 @@ mod tests {
         assert!(!dashboard.show_prompts);
         dashboard.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
         assert!(dashboard.show_prompts);
+        dashboard.show_prompt_detail = true;
+        dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!dashboard.show_prompt_detail && dashboard.show_prompts);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(dashboard.detail_focus && !dashboard.show_prompts);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!dashboard.detail_focus);
     }
 
     #[test]
