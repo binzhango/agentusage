@@ -8,7 +8,10 @@ use std::{
 use anyhow::{Context, Result};
 use chrono::{Duration as ChronoDuration, Local, NaiveDate};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -176,12 +179,17 @@ pub fn run() -> Result<()> {
 
     enable_raw_mode().context("enable terminal raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).context("enter alternate screen")?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).context("enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("create terminal")?;
     let result = Dashboard::new(backends, config).event_loop(&mut terminal);
     disable_raw_mode().ok();
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )
+    .ok();
     terminal.show_cursor().ok();
     result
 }
@@ -327,10 +335,10 @@ impl Dashboard {
             }
             terminal.draw(|frame| self.render(frame))?;
             if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if self.handle_key(key) {
-                        break;
-                    }
+                match event::read()? {
+                    Event::Key(key) if self.handle_key(key) => break,
+                    Event::Mouse(mouse) => self.handle_mouse(mouse),
+                    _ => {}
                 }
             }
         }
@@ -439,6 +447,38 @@ impl Dashboard {
                 self.detail_scroll = self.detail_scroll.saturating_add(5);
                 false
             }
+            KeyCode::Char('u')
+                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.detail_scroll = self.detail_scroll.saturating_sub(8);
+                false
+            }
+            KeyCode::Char('d')
+                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.detail_scroll = self.detail_scroll.saturating_add(8);
+                false
+            }
+            KeyCode::Char('b')
+                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.detail_scroll = self.detail_scroll.saturating_sub(20);
+                false
+            }
+            KeyCode::Char('f')
+                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.detail_scroll = self.detail_scroll.saturating_add(20);
+                false
+            }
+            KeyCode::Char(' ') if self.detail_focus => {
+                self.detail_scroll = self.detail_scroll.saturating_add(8);
+                false
+            }
+            KeyCode::Char('b') if self.detail_focus => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(8);
+                false
+            }
             KeyCode::Home => {
                 self.detail_scroll = 0;
                 if self.detail_focus {
@@ -476,6 +516,21 @@ impl Dashboard {
                 false
             }
             _ => false,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if !self.detail_focus {
+            return;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(3);
+            }
+            MouseEventKind::ScrollDown => {
+                self.detail_scroll = self.detail_scroll.saturating_add(3);
+            }
+            _ => {}
         }
     }
 
@@ -536,9 +591,9 @@ impl Dashboard {
         frame.render_widget(
             Paragraph::new(if self.detail_focus {
                 if self.show_prompts {
-                    "↑↓/jk prompt · Enter expand · p requests · PgUp/PgDn scroll · Tab/Esc back · q quit"
+                    "↑↓/jk prompt · Enter expand · p requests · ^U/^D or wheel scroll · Esc back · q quit"
                 } else {
-                    "↑↓/jk request · Enter inspect · p prompts · PgUp/PgDn scroll · Tab/Esc back · q quit"
+                    "↑↓/jk request · Enter inspect · p prompts · ^U/^D or wheel scroll · Esc back · q quit"
                 }
             } else {
                 "↑↓/jk or ←→/hl select · Enter requests · p prompts · w window · r refresh · q quit"
@@ -2152,6 +2207,45 @@ mod tests {
         assert!(dashboard.detail_focus && !dashboard.show_prompts);
         dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!dashboard.detail_focus);
+    }
+
+    #[test]
+    fn scroll_supports_mac_keys_and_mouse_wheel() {
+        let mut dashboard = Dashboard::new(
+            Vec::new(),
+            crate::config::AppConfig {
+                auto_sync: false,
+                refresh_interval: Duration::from_secs(300),
+            },
+        );
+        dashboard.detail_focus = true;
+
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(dashboard.detail_scroll, 8);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_eq!(dashboard.detail_scroll, 28);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(dashboard.detail_scroll, 8);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(dashboard.detail_scroll, 0);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(dashboard.detail_scroll, 8);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(dashboard.detail_scroll, 0);
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        dashboard.handle_mouse(mouse);
+        assert_eq!(dashboard.detail_scroll, 3);
+        dashboard.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            ..mouse
+        });
+        assert_eq!(dashboard.detail_scroll, 0);
     }
 
     #[test]
