@@ -59,6 +59,10 @@ au --version
 `agentusage` and `au` are equivalent; this guide uses the shorter `au` alias.
 For a local checkout, run `cargo install --path . --locked --bins`.
 
+Every launch performs a short release check. If a newer version is available,
+Agentusage prints the release link and upgrade command; network failures remain
+silent and do not prevent the requested command from starting.
+
 ## Quick start
 
 ### 1. Synchronize one provider
@@ -161,13 +165,17 @@ au dashboard
 | Make a larger scroll jump | `Ctrl+B`/`Ctrl+F` |
 | Jump to the beginning/end | `Home`/`End` |
 | Close the current level or return | `Esc` or `Backspace` |
-| Change time window / synchronize and refresh | `w` / `r` |
+| Select Today / Week / 30 Days / All | `1` / `2` / `3` / `4` (or `w` to cycle) |
+| Synchronize and refresh | `r` |
 | Toggle mouse capture | `m` |
 | Quit | `q` or `Ctrl+C` |
 
 To copy rendered text on macOS, press `m` to release mouse capture, select the
 text normally, and press `Cmd+C`. Press `m` again to restore mouse-wheel
 scrolling.
+
+The active date range stays visible in the header, and the bordered shortcut
+panel at the bottom changes with the current view.
 
 ![Agentusage interactive terminal dashboard](docs/images/terminal-dashboard.svg)
 

@@ -10,6 +10,16 @@ Changes that have not been released yet.
 
 ### Added
 
+- Added a startup release check for both `agentusage` and `au`. When GitHub
+  confirms that a newer release exists, the CLI prints a friendly upgrade
+  reminder and the TUI keeps the notice visible in its header; offline and
+  failed checks stay silent.
+- Added a persistent, high-contrast TUI date-range selector for `Today`,
+  `Week`, `30 Days`, and `All`, with direct `1`-`4` shortcuts in addition to
+  `w` cycling.
+- Added a responsive TUI control bar that adapts to the provider, request, and
+  prompt views, with balanced Navigate/View/App groups on wide terminals and a
+  compact two-line layout on narrower screens.
 - Added flexible TUI prompt-history navigation: direct `p` access from the
   provider grid, horizontal provider navigation with arrows or `h`/`l`,
   `Home`/`End` jumps, and hierarchical `Esc`/`Backspace` return navigation.
@@ -21,6 +31,9 @@ Changes that have not been released yet.
 
 ### Fixed
 
+- Prompt-history tables now fit the available terminal width exactly and use
+  Unicode display widths, preventing wrapped or skewed columns when prompts or
+  model names contain wide characters.
 - PostgreSQL summary buckets now cast `SUM(BIGINT)` results back to `BIGINT`,
   preventing model, provider, and client aggregates from failing Rust `i64`
   deserialization in PostgreSQL-backed dashboards and reports.

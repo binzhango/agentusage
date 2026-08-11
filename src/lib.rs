@@ -4,6 +4,7 @@ mod providers;
 mod server;
 mod storage;
 mod tui;
+mod version_check;
 mod view;
 
 use anyhow::{Context, Result};
@@ -80,6 +81,10 @@ struct SyncArgs {
 }
 
 pub fn run() -> Result<()> {
+    let update_notice = version_check::check();
+    if let Some(notice) = &update_notice {
+        eprintln!("{}", notice.terminal_message());
+    }
     let cli = Cli::parse();
     match cli.command {
         None => {
@@ -87,7 +92,7 @@ pub fn run() -> Result<()> {
             println!();
             Ok(())
         }
-        Some(Command::Dashboard) => tui::run(),
+        Some(Command::Dashboard) => tui::run(update_notice),
         Some(Command::Server {
             host,
             port,
