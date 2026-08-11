@@ -41,32 +41,87 @@ and track estimated cost without sending usage data to a hosted service.
 | `copilot` | Copilot CLI databases and VS Code logs | CLI/IDE attribution, models, tokens, AI credits |
 | `pi` | Pi append-only session JSONL | Providers, models, prompts, tokens, cost, projects, tools |
 
-## Quick start
+## Install
 
-Install the `agentusage` command and its shorter `au` alias:
+Download a prebuilt archive from the
+[latest release](https://github.com/binzhango/agentusage/releases/latest),
+verify it against `SHA256SUMS`, and place the executables on your `PATH`.
+Archives are available for macOS Apple Silicon, Linux ARM64, Linux x86_64, and
+Windows x86_64.
+
+Alternatively, install both executable names with Rust 1.85 or newer:
 
 ```bash
-cargo install --git https://github.com/binzhango/agentusage --locked --bins
+cargo install agentusage --locked
 au --version
 ```
 
-Synchronize the providers you use, then open the dashboard:
+`agentusage` and `au` are equivalent; this guide uses the shorter `au` alias.
+For a local checkout, run `cargo install --path . --locked --bins`.
+
+## Quick start
+
+### 1. Synchronize one provider
+
+Start with a coding agent you already use:
 
 ```bash
 au sync codex
+```
+
+Replace `codex` with `claude_code`, `opencode`, `copilot`, or `pi` as needed.
+On first use, Agentusage asks where to store normalized usage. SQLite is the
+recommended default: enter `s` at the prompt. It creates a provider-specific
+database such as:
+
+```text
+~/.local/state/agentusage/codex.db
+```
+
+For PostgreSQL, configure `AGENTUSAGE_POSTGRES_URL` before the first sync and
+choose `p`; see [Configuration](docs/CONFIGURATION.md#postgresql).
+
+Synchronization reads the provider's existing local history without modifying
+it. It is incremental and idempotent, so rerunning the same command imports
+only new or changed records.
+
+Synchronize additional providers only when you use them:
+
+```bash
 au sync claude_code
 au sync opencode
 au sync copilot
 au sync pi
+```
+
+### 2. Choose how to view the data
+
+```bash
+# Interactive terminal dashboard
+au dashboard
+
+# Browser dashboard and local JSON API
 au server --open
+
+# One-off command-line report
+au daily --provider codex
 ```
 
 If the browser does not open automatically, visit
-[http://127.0.0.1:8787](http://127.0.0.1:8787).
+[http://127.0.0.1:8787](http://127.0.0.1:8787). Only synchronized providers
+have data. An unavailable provider can be initialized with
+`au sync <provider>` or hidden from the browser dashboard.
 
-Only synchronized providers are available. If a provider card reports that its
-storage is uninitialized, run `au sync <provider>` or hide the card when you do
-not use that provider.
+### Command map
+
+| Command | Purpose |
+| --- | --- |
+| `au sync <provider>` | Import new local history into normalized storage |
+| `au dashboard` | Open the interactive terminal dashboard |
+| `au server --open` | Start the loopback-only browser dashboard and API |
+| `au daily`, `weekly`, `monthly`, `yearly` | Synchronize and print a period report |
+| `au range --from <DATE> --to <DATE>` | Synchronize and print an inclusive custom-range report |
+| `au <command> --help` | Show all options for a command |
 
 ## Ways to explore usage
 
@@ -76,12 +131,14 @@ not use that provider.
 au server --open
 ```
 
-The dashboard includes summary metrics, daily trends, per-model breakdowns,
-paginated prompt browsing and search, full-page provider views, persistent card
-visibility, themes, and SVG export.
-Prompt bodies are fetched only after selecting `Show prompts`.
-It is embedded in the Rust binary; no Node.js runtime or separate frontend
-server is required.
+Select a time window, then use each provider card to inspect summary metrics,
+daily trends, and per-model breakdowns. Select `Show prompts` to retrieve prompt
+previews, or open the provider's full-page view for prompt search and paginated
+history. Card visibility, themes, and SVG export are available from the page.
+
+Prompt bodies are not fetched until `Show prompts` is selected. The dashboard
+is embedded in the Rust binary; no Node.js runtime or separate frontend server
+is required.
 
 Prompt history contains textual user messages only. Assistant responses, tool
 results, and provider metadata messages are excluded. GitHub Copilot's current
@@ -93,13 +150,24 @@ local sources do not expose prompt bodies, so its prompt history is empty.
 au dashboard
 ```
 
-Use `w` to change the time window, `r` to refresh, and `Enter` to open a
-provider. In detail view, press `p` to switch between requests and prompts,
-use `j`/`k` to select a row, and press `Enter` to inspect its full details.
-Scroll with `Ctrl+U`/`Ctrl+D` or the mouse wheel; `Ctrl+B`/`Ctrl+F` jump
-farther, and `Space`/`b` move down/up.
-Press `m` to toggle mouse capture when you need native terminal text selection
-and `Cmd+C` copying; press it again to restore mouse-wheel scrolling.
+| Action | Keys |
+| --- | --- |
+| Select a provider or row | Arrow keys or `j`/`k`; use `h`/`l` between providers |
+| Open recent requests | `Enter` on a provider |
+| Open prompt history directly | `p` on a provider |
+| Switch requests/prompts | `p` in a detail view |
+| Expand the selected request or prompt | `Enter` |
+| Scroll detail content | `Ctrl+U`/`Ctrl+D`, `Space`/`b`, or mouse wheel |
+| Make a larger scroll jump | `Ctrl+B`/`Ctrl+F` |
+| Jump to the beginning/end | `Home`/`End` |
+| Close the current level or return | `Esc` or `Backspace` |
+| Change time window / synchronize and refresh | `w` / `r` |
+| Toggle mouse capture | `m` |
+| Quit | `q` or `Ctrl+C` |
+
+To copy rendered text on macOS, press `m` to release mouse capture, select the
+text normally, and press `Cmd+C`. Press `m` again to restore mouse-wheel
+scrolling.
 
 ![Agentusage interactive terminal dashboard](docs/images/terminal-dashboard.svg)
 
@@ -126,20 +194,6 @@ trends, paginated request events, and searchable prompt history. See the
 [API reference](docs/API.md) for routes and response fields.
 
 ![Agentusage local JSON API with paginated request events and token provenance](docs/images/json-api.svg)
-
-## Installation
-
-Download a prebuilt archive from the
-[latest release](https://github.com/binzhango/agentusage/releases/latest), or
-install from a local checkout:
-
-```bash
-cargo install --path . --locked --bins
-```
-
-Release archives are available for macOS Apple Silicon, Linux ARM64, Linux
-x86_64, and Windows x86_64. Each archive contains both `agentusage` and `au`,
-plus checksums in `SHA256SUMS`.
 
 ## How it works
 
