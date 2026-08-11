@@ -23,6 +23,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Sparkline, Wrap},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const PROVIDERS: [&str; 5] = ["codex", "claude_code", "opencode", "copilot", "pi"];
 
@@ -46,9 +47,9 @@ impl Window {
     fn label(self) -> &'static str {
         match self {
             Self::Today => "Today",
-            Self::SevenDays => "7 Days",
+            Self::SevenDays => "Week",
             Self::ThirtyDays => "30 Days",
-            Self::All => "All Time",
+            Self::All => "All",
         }
     }
     fn index(self) -> usize {
@@ -149,7 +150,7 @@ enum RefreshResult {
     },
 }
 
-pub fn run() -> Result<()> {
+pub fn run(update_notice: Option<crate::version_check::UpdateNotice>) -> Result<()> {
     if !io::IsTerminal::is_terminal(&io::stdout()) || !io::IsTerminal::is_terminal(&io::stdin()) {
         anyhow::bail!(
             "the dashboard requires an interactive terminal; use a report subcommand for non-interactive output"
@@ -182,7 +183,7 @@ pub fn run() -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture).context("enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("create terminal")?;
-    let result = Dashboard::new(backends, config).event_loop(&mut terminal);
+    let result = Dashboard::new(backends, config, update_notice).event_loop(&mut terminal);
     disable_raw_mode().ok();
     execute!(
         terminal.backend_mut(),
@@ -216,12 +217,14 @@ struct Dashboard {
     auto_sync: bool,
     auto_refresh_interval: Duration,
     last_auto_refresh: Instant,
+    update_notice: Option<crate::version_check::UpdateNotice>,
 }
 
 impl Dashboard {
     fn new(
         backends: Vec<(String, crate::storage::BackendMode)>,
         config: crate::config::AppConfig,
+        update_notice: Option<crate::version_check::UpdateNotice>,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let mut dashboard = Self {
@@ -246,6 +249,7 @@ impl Dashboard {
             auto_sync: config.auto_sync,
             auto_refresh_interval: config.refresh_interval,
             last_auto_refresh: Instant::now(),
+            update_notice,
         };
         // Show the cached summary first, then backfill newly added dimensions
         // (such as projects) in the background.
@@ -396,13 +400,23 @@ impl Dashboard {
                 false
             }
             KeyCode::Char('w') => {
-                let window = self.snapshot.window.next();
-                self.snapshot.window = window;
-                // A window switch must not wait behind a slow ingestion pass.
-                // Bump the generation and immediately query the cached store;
-                // any older worker result is discarded when it returns.
-                self.queued_window = None;
-                self.refresh(self.tx.clone(), false);
+                self.select_window(self.snapshot.window.next());
+                false
+            }
+            KeyCode::Char('1') => {
+                self.select_window(Window::Today);
+                false
+            }
+            KeyCode::Char('2') => {
+                self.select_window(Window::SevenDays);
+                false
+            }
+            KeyCode::Char('3') => {
+                self.select_window(Window::ThirtyDays);
+                false
+            }
+            KeyCode::Char('4') => {
+                self.select_window(Window::All);
                 false
             }
             KeyCode::Char('p') | KeyCode::Char('P') => {
@@ -570,14 +584,27 @@ impl Dashboard {
         }
     }
 
+    fn select_window(&mut self, window: Window) {
+        if window == self.snapshot.window {
+            return;
+        }
+        self.snapshot.window = window;
+        // A window switch must not wait behind a slow ingestion pass. Bump the
+        // generation and immediately query the cached store; any older worker
+        // result is discarded when it returns.
+        self.queued_window = None;
+        self.refresh(self.tx.clone(), false);
+    }
+
     fn render(&self, frame: &mut Frame) {
         let area = frame.area();
+        let header_height = if self.update_notice.is_some() { 4 } else { 3 };
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(header_height),
                 Constraint::Min(5),
-                Constraint::Length(2),
+                Constraint::Length(4),
             ])
             .split(area);
         let status = if self.refreshing {
@@ -585,22 +612,34 @@ impl Dashboard {
         } else {
             "ready"
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    " agentusage ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+        let mut header = vec![Line::from(vec![
+            Span::styled(
+                " agentusage ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(
+                "{} providers · Grid · {} · {}",
+                self.snapshot.providers.len(),
+                self.snapshot.window.label(),
+                status
+            )),
+        ])];
+        header.push(window_selector(self.snapshot.window));
+        if let Some(notice) = &self.update_notice {
+            header.push(Line::from(Span::styled(
+                format!(
+                    " Update available: v{} (running v{}) · {}",
+                    notice.latest, notice.current, notice.url
                 ),
-                Span::raw(format!(
-                    "{} providers · Grid · {} · {}",
-                    self.snapshot.providers.len(),
-                    self.snapshot.window.label(),
-                    status
-                )),
-            ]))
-            .block(Block::default().borders(Borders::BOTTOM)),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+        frame.render_widget(
+            Paragraph::new(header).block(Block::default().borders(Borders::BOTTOM)),
             chunks[0],
         );
         if self.detail_focus {
@@ -608,19 +647,55 @@ impl Dashboard {
         } else {
             self.render_grid(frame, chunks[1]);
         }
-        frame.render_widget(
-            Paragraph::new(if self.detail_focus {
-                if self.show_prompts {
-                    "↑↓/jk prompt · Enter expand · p requests · ^U/^D scroll · m mouse · Esc back · q quit"
-                } else {
-                    "↑↓/jk request · Enter inspect · p prompts · ^U/^D scroll · m mouse · Esc back · q quit"
-                }
+        self.render_shortcut_footer(frame, chunks[2]);
+    }
+
+    fn render_shortcut_footer(&self, frame: &mut Frame, area: Rect) {
+        let block = Block::default()
+            .title(" Controls ")
+            .title_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        if area.width < 100 {
+            frame.render_widget(
+                Paragraph::new(compact_shortcut_footer(
+                    self.detail_focus,
+                    self.show_prompts,
+                ))
+                .block(block),
+                area,
+            );
+            return;
+        }
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+            ])
+            .split(inner);
+        for (index, lines) in shortcut_groups(self.detail_focus, self.show_prompts)
+            .into_iter()
+            .enumerate()
+        {
+            let paragraph = Paragraph::new(lines).block(if index == 0 {
+                Block::default()
             } else {
-                "↑↓/jk or ←→/hl select · Enter requests · p prompts · w window · r refresh · q quit"
-            })
-            .style(Style::default().fg(Color::DarkGray)),
-            chunks[2],
-        );
+                Block::default()
+                    .borders(Borders::LEFT)
+                    .border_style(Style::default().fg(Color::DarkGray))
+            });
+            frame.render_widget(paragraph, columns[index]);
+        }
     }
 
     fn render_grid(&self, frame: &mut Frame, area: Rect) {
@@ -833,7 +908,7 @@ impl Dashboard {
             let longest_model = provider
                 .models
                 .iter()
-                .map(|model| model.name.chars().count())
+                .map(|model| UnicodeWidthStr::width(model.name.as_str()))
                 .max()
                 .unwrap_or(28);
             // The other model columns consume 68 terminal cells including
@@ -1463,7 +1538,7 @@ impl Dashboard {
                 "Run `au sync <provider>` if history should be available.",
             ));
         } else if inner_width >= 90 {
-            let prompt_width = inner_width.saturating_sub(50).max(24) as usize;
+            let prompt_width = flexible_table_column_width(inner_width as usize, &[3, 19, 20], 4);
             let widths = [3, 19, 20, prompt_width];
             lines.push(table_border(&widths, '┌', '┬', '┐'));
             lines.push(table_header_row(
@@ -2019,9 +2094,172 @@ fn provider_color(index: usize) -> Color {
     }
 }
 
+fn window_selector(selected: Window) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        " Date range ",
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )];
+    for (index, window) in Window::all().into_iter().enumerate() {
+        spans.push(Span::raw(" "));
+        let style = if window == selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White).bg(Color::DarkGray)
+        };
+        spans.push(Span::styled(
+            format!(" {} {} ", index + 1, window.label()),
+            style,
+        ));
+    }
+    spans.push(Span::styled("  w cycles", Style::default().fg(Color::Cyan)));
+    Line::from(spans)
+}
+
+fn key_hint(key: &'static str) -> Span<'static> {
+    Span::styled(
+        key,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn hint_label(label: &'static str) -> Span<'static> {
+    Span::styled(format!(" {label}"), Style::default().fg(Color::Gray))
+}
+
+fn hint_separator() -> Span<'static> {
+    Span::styled("  ·  ", Style::default().fg(Color::DarkGray))
+}
+
+fn shortcut_group(
+    title: &'static str,
+    actions: &[(&'static str, &'static str)],
+) -> Vec<Line<'static>> {
+    let mut action_spans = vec![Span::raw(" ")];
+    for (index, (key, label)) in actions.iter().enumerate() {
+        if index > 0 {
+            action_spans.push(hint_separator());
+        }
+        action_spans.push(key_hint(key));
+        action_spans.push(hint_label(label));
+    }
+    vec![
+        Line::from(Span::styled(
+            format!(" {title}"),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(action_spans),
+    ]
+}
+
+fn shortcut_groups(detail_focus: bool, show_prompts: bool) -> [Vec<Line<'static>>; 3] {
+    if !detail_focus {
+        return [
+            shortcut_group("NAVIGATE", &[("↑↓/jk", "select"), ("←→/hl", "provider")]),
+            shortcut_group("OPEN", &[("Enter", "requests"), ("p", "prompts")]),
+            shortcut_group(
+                "DATE & APP",
+                &[("1-4/w", "range"), ("r", "refresh"), ("q", "quit")],
+            ),
+        ];
+    }
+
+    let (row, action, switch) = if show_prompts {
+        ("prompt", "expand", "requests")
+    } else {
+        ("request", "inspect", "prompts")
+    };
+    [
+        shortcut_group("NAVIGATE", &[("↑↓/jk", row), ("^U/^D", "scroll")]),
+        shortcut_group("VIEW", &[("Enter", action), ("p", switch)]),
+        shortcut_group("APP", &[("m", "mouse"), ("Esc", "back"), ("q", "quit")]),
+    ]
+}
+
+fn compact_shortcut_footer(detail_focus: bool, show_prompts: bool) -> Vec<Line<'static>> {
+    let category = |title| {
+        Span::styled(
+            format!(" {title}  "),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    if !detail_focus {
+        return vec![
+            Line::from(vec![
+                category("NAV"),
+                key_hint("↑↓/jk"),
+                hint_label("select"),
+                hint_separator(),
+                key_hint("←→/hl"),
+                hint_label("provider"),
+                hint_separator(),
+                key_hint("Enter"),
+                hint_label("requests"),
+            ]),
+            Line::from(vec![
+                category("MORE"),
+                key_hint("p"),
+                hint_label("prompts"),
+                hint_separator(),
+                key_hint("1-4/w"),
+                hint_label("range"),
+                hint_separator(),
+                key_hint("r"),
+                hint_label("refresh"),
+                hint_separator(),
+                key_hint("q"),
+                hint_label("quit"),
+            ]),
+        ];
+    }
+
+    let (row, action, switch) = if show_prompts {
+        ("prompt", "expand", "requests")
+    } else {
+        ("request", "inspect", "prompts")
+    };
+    vec![
+        Line::from(vec![
+            category("VIEW"),
+            key_hint("↑↓/jk"),
+            hint_label(row),
+            hint_separator(),
+            key_hint("Enter"),
+            hint_label(action),
+            hint_separator(),
+            key_hint("p"),
+            hint_label(switch),
+            hint_separator(),
+            key_hint("Esc"),
+            hint_label("back"),
+        ]),
+        Line::from(vec![
+            category("MORE"),
+            key_hint("^U/^D"),
+            hint_label("scroll"),
+            hint_separator(),
+            key_hint("m"),
+            hint_label("mouse"),
+            hint_separator(),
+            key_hint("q"),
+            hint_label("quit"),
+        ]),
+    ]
+}
+
 fn section_line(title: &str, color: Color, width: u16) -> Line<'static> {
     let width = width as usize;
-    let title_width = title.chars().count() + 2;
+    let title_width = UnicodeWidthStr::width(title) + 2;
     let fill = width.saturating_sub(title_width).max(1);
     Line::from(Span::styled(
         format!("{title} {}", "─".repeat(fill)),
@@ -2042,17 +2280,30 @@ fn table_border(widths: &[usize], left: char, separator: char, right: char) -> L
     Line::from(Span::styled(value, Style::default().fg(Color::DarkGray)))
 }
 
+fn flexible_table_column_width(
+    total_width: usize,
+    fixed_widths: &[usize],
+    column_count: usize,
+) -> usize {
+    let borders_and_padding = column_count * 3 + 1;
+    total_width
+        .saturating_sub(fixed_widths.iter().sum::<usize>() + borders_and_padding)
+        .max(1)
+}
+
 fn table_row(cells: &[String], widths: &[usize], right_aligned: &[bool]) -> Line<'static> {
     let mut value = String::from("│");
     for ((cell, width), right_align) in cells.iter().zip(widths).zip(right_aligned) {
         let cell = truncate(cell, *width);
-        let cell = if *right_align {
-            format!("{cell:>width$}")
-        } else {
-            format!("{cell:<width$}")
-        };
+        let padding = width.saturating_sub(UnicodeWidthStr::width(cell.as_str()));
         value.push(' ');
+        if *right_align {
+            value.push_str(&" ".repeat(padding));
+        }
         value.push_str(&cell);
+        if !*right_align {
+            value.push_str(&" ".repeat(padding));
+        }
         value.push_str(" │");
     }
     Line::from(value)
@@ -2068,8 +2319,8 @@ fn table_header_row(cells: &[String], widths: &[usize], right_aligned: &[bool]) 
 
 fn aligned_header(left: &str, right: &str, width: u16) -> String {
     let width = width as usize;
-    let left_len = left.chars().count();
-    let right_len = right.chars().count();
+    let left_len = UnicodeWidthStr::width(left);
+    let right_len = UnicodeWidthStr::width(right);
     let gap = width.saturating_sub(left_len + right_len + 2).max(2);
     format!("{left}{}{right}", " ".repeat(gap))
 }
@@ -2134,14 +2385,25 @@ fn rate_limit_bar(used: Option<f64>, width: usize) -> Line<'static> {
 }
 
 fn truncate(value: &str, max: usize) -> String {
-    if value.chars().count() <= max {
+    if UnicodeWidthStr::width(value) <= max {
         return value.to_owned();
     }
-    value
-        .chars()
-        .take(max.saturating_sub(1))
-        .collect::<String>()
-        + "…"
+    if max == 0 {
+        return String::new();
+    }
+    let content_width = max - 1;
+    let mut truncated = String::new();
+    let mut width = 0;
+    for character in value.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or_default();
+        if width + character_width > content_width {
+            break;
+        }
+        truncated.push(character);
+        width += character_width;
+    }
+    truncated.push('…');
+    truncated
 }
 
 fn single_line(value: &str) -> String {
@@ -2157,7 +2419,12 @@ mod tests {
     fn window_cycles() {
         assert_eq!(Window::Today.next(), Window::SevenDays);
         assert_eq!(Window::All.next(), Window::Today);
+        assert_eq!(
+            Window::all().map(Window::label),
+            ["Today", "Week", "30 Days", "All"]
+        );
     }
+
     #[test]
     fn compact_formats_large_values() {
         assert_eq!(compact(1_500), "1.5K");
@@ -2175,6 +2442,49 @@ mod tests {
     }
 
     #[test]
+    fn prompt_table_uses_the_available_width_and_aligns_wide_text() {
+        let prompt_width = flexible_table_column_width(118, &[3, 19, 20], 4);
+        let widths = [3, 19, 20, prompt_width];
+        assert_eq!(widths.iter().sum::<usize>() + widths.len() * 3 + 1, 118);
+
+        let row = table_row(
+            &[
+                "1".to_owned(),
+                "2026-08-10 12:00:00".to_owned(),
+                "模型".to_owned(),
+                "分析这份报告并列出建议".to_owned(),
+            ],
+            &widths,
+            &[true, false, false, false],
+        );
+        let rendered = row
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(UnicodeWidthStr::width(rendered.as_str()), 118);
+    }
+
+    #[test]
+    fn number_keys_select_visible_date_ranges() {
+        let mut dashboard = Dashboard::new(
+            Vec::new(),
+            crate::config::AppConfig {
+                auto_sync: false,
+                refresh_interval: Duration::from_secs(300),
+            },
+            None,
+        );
+
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+        assert_eq!(dashboard.snapshot.window, Window::ThirtyDays);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+        assert_eq!(dashboard.snapshot.window, Window::All);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert_eq!(dashboard.snapshot.window, Window::Today);
+    }
+
+    #[test]
     fn prompt_history_is_reachable_from_grid_and_supports_flexible_navigation() {
         let mut dashboard = Dashboard::new(
             Vec::new(),
@@ -2182,6 +2492,7 @@ mod tests {
                 auto_sync: false,
                 refresh_interval: Duration::from_secs(300),
             },
+            None,
         );
         dashboard.snapshot.providers = vec![
             ProviderData {
@@ -2237,6 +2548,7 @@ mod tests {
                 auto_sync: false,
                 refresh_interval: Duration::from_secs(300),
             },
+            None,
         );
         dashboard.detail_focus = true;
 
@@ -2285,6 +2597,11 @@ mod tests {
                     auto_sync: false,
                     refresh_interval: Duration::from_secs(300),
                 },
+                Some(crate::version_check::UpdateNotice {
+                    current: "1.4.0".into(),
+                    latest: "1.5.0".into(),
+                    url: "https://example.com/release".into(),
+                }),
             );
             let occurred_at = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
             dashboard.snapshot.providers = vec![ProviderData {
@@ -2336,6 +2653,16 @@ mod tests {
                 .map(|cell| cell.symbol())
                 .collect::<String>();
             assert!(prompt_view.contains("Prompt History"));
+            assert!(prompt_view.contains("Date range"));
+            assert!(prompt_view.contains("Controls"));
+            assert!(prompt_view.contains("Update available"));
+            if width >= 100 {
+                assert!(prompt_view.contains("NAVIGATE"));
+                assert!(prompt_view.contains("VIEW"));
+                assert!(prompt_view.contains("APP"));
+            } else {
+                assert!(prompt_view.contains("MORE"));
+            }
             let rendered = terminal.backend().buffer().content().iter().any(|cell| {
                 let symbol = cell.symbol();
                 symbol == "a" || symbol == "D"

@@ -134,7 +134,8 @@ Keyboard controls:
 | `Enter` in detail | Toggle metadata or full prompt text for the selected row |
 | `PageUp` / `PageDown`, `Ctrl+U` / `Ctrl+D`, mouse wheel | Scroll provider detail |
 | `m` | Toggle mouse capture; turn it off to select and copy text with the terminal |
-| `w` | Cycle through time windows |
+| `1` / `2` / `3` / `4` | Select Today / Week / 30 Days / All |
+| `w` | Cycle through date ranges |
 | `r` | Refresh |
 | `Esc` | Close request detail or return to the grid |
 | `q` | Quit from any view |
@@ -144,6 +145,10 @@ the 25 most recent normalized requests, and the 25 most recent retrievable user
 prompts. Timestamps are shown in the machine's local timezone. Prompt bodies
 remain local and are available only when the provider persists them. The
 terminal dashboard requires an interactive terminal.
+
+The active range is highlighted in the persistent header selector. A bordered,
+high-contrast keyboard panel remains visible at the bottom and adapts its
+shortcuts to the provider grid, request list, or prompt list.
 
 PageUp/PageDown remain supported where available. On macOS keyboards, use
 `Ctrl+U`/`Ctrl+D` for a page-sized scroll, the mouse wheel for smaller steps,
