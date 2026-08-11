@@ -31,16 +31,20 @@ impl PostgresStore {
     fn connect_without_init(url: &str) -> Result<Self> {
         let config = Config::from_str(url)?;
         for host in config.get_hosts() {
-            if let Host::Tcp(host) = host {
-                let local = host.eq_ignore_ascii_case("localhost")
-                    || host
-                        .parse::<IpAddr>()
-                        .is_ok_and(|address| address.is_loopback());
-                if !local {
-                    anyhow::bail!(
-                        "remote PostgreSQL is disabled because this build does not provide TLS; use a local socket or loopback host"
-                    );
+            match host {
+                Host::Tcp(host) => {
+                    let local = host.eq_ignore_ascii_case("localhost")
+                        || host
+                            .parse::<IpAddr>()
+                            .is_ok_and(|address| address.is_loopback());
+                    if !local {
+                        anyhow::bail!(
+                            "remote PostgreSQL is disabled because this build does not provide TLS; use a local socket or loopback host"
+                        );
+                    }
                 }
+                #[cfg(unix)]
+                Host::Unix(_) => {}
             }
         }
         Ok(Self {

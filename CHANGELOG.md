@@ -13,6 +13,8 @@ Changes that have not been released yet.
 - PostgreSQL summary buckets now cast `SUM(BIGINT)` results back to `BIGINT`,
   preventing model, provider, and client aggregates from failing Rust `i64`
   deserialization in PostgreSQL-backed dashboards and reports.
+- PostgreSQL loopback-host validation now compiles cleanly on Windows with
+  warnings denied while retaining Unix-socket support on Unix platforms.
 
 ## [1.4.0] - 2026-08-10
 
@@ -176,4 +178,3 @@ Changes that have not been released yet.
 - Document agentusage CLI usage (f009c06)
 - Add Rust CI and automatic releases (97f4ae8)
 - Initial commit (a150702)
-
