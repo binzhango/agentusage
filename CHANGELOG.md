@@ -8,7 +8,16 @@ The release workflow updates this file automatically when `main` is released.
 
 Changes that have not been released yet.
 
-## [1.5.0] - 2026-08-11
+### Added
+
+- Added flexible TUI prompt-history navigation: direct `p` access from the
+  provider grid, horizontal provider navigation with arrows or `h`/`l`,
+  `Home`/`End` jumps, and hierarchical `Esc`/`Backspace` return navigation.
+- Added macOS-friendly TUI scrolling with `Ctrl+U`/`Ctrl+D`,
+  `Ctrl+B`/`Ctrl+F`, `Space`/`b`, and mouse-wheel support.
+- Added the `m` TUI mouse-capture toggle so macOS users can disable mouse
+  reporting, select rendered prompt text with the terminal, and copy it with
+  `Cmd+C`, then restore wheel scrolling when finished.
 
 ### Fixed
 

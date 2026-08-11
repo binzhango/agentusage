@@ -132,7 +132,8 @@ Keyboard controls:
 | `Enter` / `Tab` | Open provider detail or return to the grid |
 | `p` in detail | Switch between recent requests and prompts |
 | `Enter` in detail | Toggle metadata or full prompt text for the selected row |
-| `PageUp` / `PageDown` | Scroll provider detail |
+| `PageUp` / `PageDown`, `Ctrl+U` / `Ctrl+D`, mouse wheel | Scroll provider detail |
+| `m` | Toggle mouse capture; turn it off to select and copy text with the terminal |
 | `w` | Cycle through time windows |
 | `r` | Refresh |
 | `Esc` | Close request detail or return to the grid |
@@ -143,6 +144,14 @@ the 25 most recent normalized requests, and the 25 most recent retrievable user
 prompts. Timestamps are shown in the machine's local timezone. Prompt bodies
 remain local and are available only when the provider persists them. The
 terminal dashboard requires an interactive terminal.
+
+PageUp/PageDown remain supported where available. On macOS keyboards, use
+`Ctrl+U`/`Ctrl+D` for a page-sized scroll, the mouse wheel for smaller steps,
+or `Ctrl+B`/`Ctrl+F` for larger jumps. `Space` and `b` also move down and up.
+
+If your macOS terminal does not let Option/Shift bypass mouse reporting, press
+`m` to disable mouse capture, select the rendered text normally, and copy it
+with `Cmd+C`. Press `m` again to restore mouse-wheel scrolling.
 
 ## Prompt history
 

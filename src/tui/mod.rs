@@ -8,7 +8,10 @@ use std::{
 use anyhow::{Context, Result};
 use chrono::{Duration as ChronoDuration, Local, NaiveDate};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -176,12 +179,17 @@ pub fn run() -> Result<()> {
 
     enable_raw_mode().context("enable terminal raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).context("enter alternate screen")?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).context("enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("create terminal")?;
     let result = Dashboard::new(backends, config).event_loop(&mut terminal);
     disable_raw_mode().ok();
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )
+    .ok();
     terminal.show_cursor().ok();
     result
 }
@@ -199,6 +207,7 @@ struct Dashboard {
     selected_prompt: usize,
     show_prompts: bool,
     show_prompt_detail: bool,
+    mouse_capture: bool,
     refreshing: bool,
     pending: usize,
     generation: u64,
@@ -228,6 +237,7 @@ impl Dashboard {
             selected_prompt: 0,
             show_prompts: false,
             show_prompt_detail: false,
+            mouse_capture: true,
             refreshing: false,
             pending: 0,
             generation: 0,
@@ -327,10 +337,24 @@ impl Dashboard {
             }
             terminal.draw(|frame| self.render(frame))?;
             if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if self.handle_key(key) {
-                        break;
+                let mouse_capture_before = self.mouse_capture;
+                let should_quit = match event::read()? {
+                    Event::Key(key) => self.handle_key(key),
+                    Event::Mouse(mouse) => {
+                        self.handle_mouse(mouse);
+                        false
                     }
+                    _ => false,
+                };
+                if self.mouse_capture != mouse_capture_before {
+                    if self.mouse_capture {
+                        execute!(terminal.backend_mut(), EnableMouseCapture)?;
+                    } else {
+                        execute!(terminal.backend_mut(), DisableMouseCapture)?;
+                    }
+                }
+                if should_quit {
+                    break;
                 }
             }
         }
@@ -343,7 +367,17 @@ impl Dashboard {
         }
         match key.code {
             KeyCode::Char('q') => true,
-            KeyCode::Esc if self.detail_focus => {
+            KeyCode::Esc | KeyCode::Backspace if self.show_prompt_detail => {
+                self.show_prompt_detail = false;
+                self.detail_scroll = 0;
+                false
+            }
+            KeyCode::Esc | KeyCode::Backspace if self.show_prompts => {
+                self.show_prompts = false;
+                self.detail_scroll = 0;
+                false
+            }
+            KeyCode::Esc | KeyCode::Backspace if self.detail_focus => {
                 self.detail_focus = false;
                 self.show_event_detail = false;
                 self.show_prompt_detail = false;
@@ -357,6 +391,10 @@ impl Dashboard {
                 }
                 false
             }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                self.mouse_capture = !self.mouse_capture;
+                false
+            }
             KeyCode::Char('w') => {
                 let window = self.snapshot.window.next();
                 self.snapshot.window = window;
@@ -367,11 +405,24 @@ impl Dashboard {
                 self.refresh(self.tx.clone(), false);
                 false
             }
-            KeyCode::Char('p') if self.detail_focus => {
-                self.show_prompts = !self.show_prompts;
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                if !self.detail_focus {
+                    self.detail_focus = true;
+                    self.show_prompts = true;
+                } else {
+                    self.show_prompts = !self.show_prompts;
+                }
                 self.show_event_detail = false;
                 self.show_prompt_detail = false;
                 self.detail_scroll = 0;
+                false
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.move_provider(-1);
+                false
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                self.move_provider(1);
                 false
             }
             KeyCode::Enter if self.detail_focus => {
@@ -416,6 +467,64 @@ impl Dashboard {
                 self.detail_scroll = self.detail_scroll.saturating_add(5);
                 false
             }
+            KeyCode::Char('u')
+                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.detail_scroll = self.detail_scroll.saturating_sub(8);
+                false
+            }
+            KeyCode::Char('d')
+                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.detail_scroll = self.detail_scroll.saturating_add(8);
+                false
+            }
+            KeyCode::Char('b')
+                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.detail_scroll = self.detail_scroll.saturating_sub(20);
+                false
+            }
+            KeyCode::Char('f')
+                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.detail_scroll = self.detail_scroll.saturating_add(20);
+                false
+            }
+            KeyCode::Char(' ') if self.detail_focus => {
+                self.detail_scroll = self.detail_scroll.saturating_add(8);
+                false
+            }
+            KeyCode::Char('b') if self.detail_focus => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(8);
+                false
+            }
+            KeyCode::Home => {
+                self.detail_scroll = 0;
+                if self.detail_focus {
+                    self.selected_event = 0;
+                    self.selected_prompt = 0;
+                    self.show_event_detail = false;
+                    self.show_prompt_detail = false;
+                } else {
+                    self.selected = 0;
+                }
+                false
+            }
+            KeyCode::End => {
+                self.detail_scroll = u16::MAX;
+                if self.detail_focus {
+                    if let Some(provider) = self.snapshot.providers.get(self.selected) {
+                        self.selected_event = provider.events.len().saturating_sub(1);
+                        self.selected_prompt = provider.prompt_events.len().saturating_sub(1);
+                    }
+                    self.show_event_detail = false;
+                    self.show_prompt_detail = false;
+                } else {
+                    self.selected = self.snapshot.providers.len().saturating_sub(1);
+                }
+                false
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.selected = self.selected.saturating_sub(1);
                 false
@@ -427,6 +536,37 @@ impl Dashboard {
                 false
             }
             _ => false,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if !self.detail_focus {
+            return;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(3);
+            }
+            MouseEventKind::ScrollDown => {
+                self.detail_scroll = self.detail_scroll.saturating_add(3);
+            }
+            _ => {}
+        }
+    }
+
+    fn move_provider(&mut self, delta: isize) {
+        if self.snapshot.providers.is_empty() {
+            return;
+        }
+        let last = self.snapshot.providers.len().saturating_sub(1) as isize;
+        let next = (self.selected as isize + delta).clamp(0, last) as usize;
+        if next != self.selected {
+            self.selected = next;
+            self.detail_scroll = 0;
+            self.selected_event = 0;
+            self.selected_prompt = 0;
+            self.show_event_detail = false;
+            self.show_prompt_detail = false;
         }
     }
 
@@ -471,12 +611,12 @@ impl Dashboard {
         frame.render_widget(
             Paragraph::new(if self.detail_focus {
                 if self.show_prompts {
-                    "↑↓/jk prompt · Enter expand · p requests · PgUp/PgDn scroll · Tab/Esc back · q quit"
+                    "↑↓/jk prompt · Enter expand · p requests · ^U/^D scroll · m mouse · Esc back · q quit"
                 } else {
-                    "↑↓/jk request · Enter inspect · p prompts · PgUp/PgDn scroll · Tab/Esc back · q quit"
+                    "↑↓/jk request · Enter inspect · p prompts · ^U/^D scroll · m mouse · Esc back · q quit"
                 }
             } else {
-                "↑↓/jk select · Enter/Tab detail · w window · r refresh · q quit"
+                "↑↓/jk or ←→/hl select · Enter requests · p prompts · w window · r refresh · q quit"
             })
             .style(Style::default().fg(Color::DarkGray)),
             chunks[2],
@@ -511,6 +651,10 @@ impl Dashboard {
             return;
         };
         let color = provider_color(self.selected);
+        if self.show_prompts {
+            self.render_prompt_dashboard(frame, area, provider, color);
+            return;
+        }
         let mut lines = vec![Line::from(aligned_header(
             &format!("● {}", provider_label(&provider.name)),
             &format!(
@@ -1283,6 +1427,165 @@ impl Dashboard {
         );
     }
 
+    fn render_prompt_dashboard(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        provider: &ProviderData,
+        color: Color,
+    ) {
+        let inner_width = area.width.saturating_sub(2);
+        let mut lines = vec![Line::from(aligned_header(
+            &format!("● {}", provider_label(&provider.name)),
+            &format!(
+                "✦ Prompts · {} · {}",
+                provider.name,
+                self.snapshot.window.label()
+            ),
+            inner_width,
+        ))];
+        lines.push(Line::from(format!(
+            "{} retrievable prompts · use ↑↓/jk, Home/End, Enter to expand",
+            provider.prompt_events.len()
+        )));
+        lines.push(Line::from("─".repeat(inner_width as usize)));
+        lines.push(section_line(
+            "Recent Prompts",
+            Color::Rgb(142, 209, 197),
+            inner_width,
+        ));
+        if provider.prompt_events.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No retrievable user prompts for this time range",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(
+                "Run `au sync <provider>` if history should be available.",
+            ));
+        } else if inner_width >= 90 {
+            let prompt_width = inner_width.saturating_sub(50).max(24) as usize;
+            let widths = [3, 19, 20, prompt_width];
+            lines.push(table_border(&widths, '┌', '┬', '┐'));
+            lines.push(table_header_row(
+                &["#", "timestamp", "model", "prompt"].map(str::to_owned),
+                &widths,
+                &[true, false, false, false],
+            ));
+            lines.push(table_border(&widths, '├', '┼', '┤'));
+            for (index, prompt) in provider.prompt_events.iter().enumerate() {
+                let row = table_row(
+                    &[
+                        (index + 1).to_string(),
+                        prompt
+                            .usage
+                            .occurred_at
+                            .with_timezone(&Local)
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string(),
+                        truncate(prompt.usage.model.as_deref().unwrap_or("unknown"), 20),
+                        truncate(&single_line(&prompt.text), prompt_width),
+                    ],
+                    &widths,
+                    &[true, false, false, false],
+                );
+                lines.push(if index == self.selected_prompt {
+                    row.style(
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    row
+                });
+            }
+            lines.push(table_border(&widths, '└', '┴', '┘'));
+        } else {
+            for (index, prompt) in provider.prompt_events.iter().enumerate() {
+                let line = Line::from(format!(
+                    "{} {} · {} · {}",
+                    if index == self.selected_prompt {
+                        ">"
+                    } else {
+                        " "
+                    },
+                    prompt
+                        .usage
+                        .occurred_at
+                        .with_timezone(&Local)
+                        .format("%m-%d %H:%M"),
+                    truncate(prompt.usage.model.as_deref().unwrap_or("unknown"), 18),
+                    truncate(
+                        &single_line(&prompt.text),
+                        inner_width.saturating_sub(36) as usize,
+                    ),
+                ));
+                lines.push(if index == self.selected_prompt {
+                    line.style(Style::default().fg(Color::Yellow))
+                } else {
+                    line
+                });
+            }
+        }
+        if self.show_prompt_detail
+            && let Some(prompt) = provider.prompt_events.get(self.selected_prompt)
+        {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Selected prompt",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(format!(
+                "timestamp {} local / {} UTC",
+                prompt
+                    .usage
+                    .occurred_at
+                    .with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M:%S %Z"),
+                prompt.usage.occurred_at.format("%Y-%m-%d %H:%M:%S")
+            )));
+            lines.push(Line::from(format!(
+                "session {} · model {} · project {}",
+                prompt.usage.session_id.as_deref().unwrap_or("unavailable"),
+                prompt.usage.model.as_deref().unwrap_or("unknown"),
+                prompt.usage.project.as_deref().unwrap_or("unavailable")
+            )));
+            lines.push(Line::from(format!(
+                "source {} / {} · locator {}",
+                prompt.source_system,
+                prompt.source_channel,
+                prompt.source_locator.as_deref().unwrap_or("unavailable")
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Prompt text",
+                Style::default().fg(Color::Rgb(142, 209, 197)),
+            )));
+            lines.extend(
+                prompt
+                    .text
+                    .lines()
+                    .map(|line| Line::from(format!("  {line}"))),
+            );
+        }
+        frame.render_widget(
+            Paragraph::new(lines)
+                .scroll((self.detail_scroll, 0))
+                .wrap(Wrap { trim: false })
+                .block(
+                    Block::default()
+                        .title(format!(
+                            " {} Prompt History ",
+                            provider_label(&provider.name)
+                        ))
+                        .borders(Borders::ALL)
+                        .border_style(color),
+                ),
+            area,
+        );
+    }
+
     fn render_card(&self, frame: &mut Frame, area: Rect, index: usize, provider: &ProviderData) {
         let color = provider_color(index);
         let selected = index == self.selected;
@@ -1872,6 +2175,106 @@ mod tests {
     }
 
     #[test]
+    fn prompt_history_is_reachable_from_grid_and_supports_flexible_navigation() {
+        let mut dashboard = Dashboard::new(
+            Vec::new(),
+            crate::config::AppConfig {
+                auto_sync: false,
+                refresh_interval: Duration::from_secs(300),
+            },
+        );
+        dashboard.snapshot.providers = vec![
+            ProviderData {
+                name: "codex".into(),
+                prompt_events: vec![crate::storage::PromptDetail {
+                    usage: crate::storage::UsageEvent {
+                        event_id: "prompt-1".into(),
+                        agent_name: "codex".into(),
+                        ..Default::default()
+                    },
+                    text: "show prompt history".into(),
+                    source_system: "codex".into(),
+                    source_channel: "jsonl".into(),
+                    source_locator: None,
+                }],
+                ..Default::default()
+            },
+            ProviderData {
+                name: "pi".into(),
+                ..Default::default()
+            },
+        ];
+
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        assert!(dashboard.detail_focus);
+        assert!(dashboard.show_prompts);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(dashboard.selected, 1);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(dashboard.selected, 0);
+        dashboard.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        assert_eq!(dashboard.selected_prompt, 0);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        assert_eq!(dashboard.detail_scroll, 0);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE));
+        assert!(!dashboard.show_prompts);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        assert!(dashboard.show_prompts);
+        dashboard.show_prompt_detail = true;
+        dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!dashboard.show_prompt_detail && dashboard.show_prompts);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(dashboard.detail_focus && !dashboard.show_prompts);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!dashboard.detail_focus);
+    }
+
+    #[test]
+    fn scroll_supports_mac_keys_and_mouse_wheel() {
+        let mut dashboard = Dashboard::new(
+            Vec::new(),
+            crate::config::AppConfig {
+                auto_sync: false,
+                refresh_interval: Duration::from_secs(300),
+            },
+        );
+        dashboard.detail_focus = true;
+
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(dashboard.detail_scroll, 8);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_eq!(dashboard.detail_scroll, 28);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(dashboard.detail_scroll, 8);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(dashboard.detail_scroll, 0);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(dashboard.detail_scroll, 8);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(dashboard.detail_scroll, 0);
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        dashboard.handle_mouse(mouse);
+        assert_eq!(dashboard.detail_scroll, 3);
+        dashboard.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            ..mouse
+        });
+        assert_eq!(dashboard.detail_scroll, 0);
+
+        assert!(dashboard.mouse_capture);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(!dashboard.mouse_capture);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('M'), KeyModifiers::NONE));
+        assert!(dashboard.mouse_capture);
+    }
+
+    #[test]
     fn renders_grid_and_detail_at_common_terminal_sizes() {
         for (width, height) in [(80, 24), (120, 40)] {
             let backend = TestBackend::new(width, height);
@@ -1923,6 +2326,16 @@ mod tests {
             terminal.draw(|frame| dashboard.render(frame)).unwrap();
             dashboard.detail_focus = true;
             terminal.draw(|frame| dashboard.render(frame)).unwrap();
+            dashboard.show_prompts = true;
+            terminal.draw(|frame| dashboard.render(frame)).unwrap();
+            let prompt_view = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(prompt_view.contains("Prompt History"));
             let rendered = terminal.backend().buffer().content().iter().any(|cell| {
                 let symbol = cell.symbol();
                 symbol == "a" || symbol == "D"
