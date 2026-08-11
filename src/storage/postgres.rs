@@ -31,16 +31,20 @@ impl PostgresStore {
     fn connect_without_init(url: &str) -> Result<Self> {
         let config = Config::from_str(url)?;
         for host in config.get_hosts() {
-            if let Host::Tcp(host) = host {
-                let local = host.eq_ignore_ascii_case("localhost")
-                    || host
-                        .parse::<IpAddr>()
-                        .is_ok_and(|address| address.is_loopback());
-                if !local {
-                    anyhow::bail!(
-                        "remote PostgreSQL is disabled because this build does not provide TLS; use a local socket or loopback host"
-                    );
+            match host {
+                Host::Tcp(host) => {
+                    let local = host.eq_ignore_ascii_case("localhost")
+                        || host
+                            .parse::<IpAddr>()
+                            .is_ok_and(|address| address.is_loopback());
+                    if !local {
+                        anyhow::bail!(
+                            "remote PostgreSQL is disabled because this build does not provide TLS; use a local socket or loopback host"
+                        );
+                    }
                 }
+                #[cfg(unix)]
+                Host::Unix(_) => {}
             }
         }
         Ok(Self {
@@ -283,9 +287,11 @@ impl UsageStore for PostgresStore {
             );
         }
         for dimension in ["model", "provider_id", "client"] {
+            // PostgreSQL promotes SUM(BIGINT) to NUMERIC. Cast integer totals
+            // back to BIGINT so they match the canonical i64 storage model.
             let rows = self.client.query(
                 &format!(
-                    "SELECT {dimension}, COALESCE(SUM(requests),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(reasoning_tokens),0), COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(ai_units_nano),0), COALESCE(SUM(request_multiplier),0), COALESCE(SUM(ai_credits),0) FROM agentusage_usage_events WHERE occurred_at >= $1 AND occurred_at < $2 AND ($3::text IS NULL OR agent_name = $3) AND {dimension} IS NOT NULL AND {dimension} <> '' GROUP BY {dimension}"
+                    "SELECT {dimension}, COALESCE(SUM(requests),0)::BIGINT, COALESCE(SUM(input_tokens),0)::BIGINT, COALESCE(SUM(output_tokens),0)::BIGINT, COALESCE(SUM(reasoning_tokens),0)::BIGINT, COALESCE(SUM(cache_read_tokens),0)::BIGINT, COALESCE(SUM(cache_write_tokens),0)::BIGINT, COALESCE(SUM(total_tokens),0)::BIGINT, COALESCE(SUM(cost_usd),0), COALESCE(SUM(ai_units_nano),0)::BIGINT, COALESCE(SUM(request_multiplier),0), COALESCE(SUM(ai_credits),0) FROM agentusage_usage_events WHERE occurred_at >= $1 AND occurred_at < $2 AND ($3::text IS NULL OR agent_name = $3) AND {dimension} IS NOT NULL AND {dimension} <> '' GROUP BY {dimension}"
                 ),
                 &[&from, &to, &agent_name],
             )?;
