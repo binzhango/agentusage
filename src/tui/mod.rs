@@ -207,6 +207,7 @@ struct Dashboard {
     selected_prompt: usize,
     show_prompts: bool,
     show_prompt_detail: bool,
+    mouse_capture: bool,
     refreshing: bool,
     pending: usize,
     generation: u64,
@@ -236,6 +237,7 @@ impl Dashboard {
             selected_prompt: 0,
             show_prompts: false,
             show_prompt_detail: false,
+            mouse_capture: true,
             refreshing: false,
             pending: 0,
             generation: 0,
@@ -335,10 +337,24 @@ impl Dashboard {
             }
             terminal.draw(|frame| self.render(frame))?;
             if event::poll(Duration::from_millis(100))? {
-                match event::read()? {
-                    Event::Key(key) if self.handle_key(key) => break,
-                    Event::Mouse(mouse) => self.handle_mouse(mouse),
-                    _ => {}
+                let mouse_capture_before = self.mouse_capture;
+                let should_quit = match event::read()? {
+                    Event::Key(key) => self.handle_key(key),
+                    Event::Mouse(mouse) => {
+                        self.handle_mouse(mouse);
+                        false
+                    }
+                    _ => false,
+                };
+                if self.mouse_capture != mouse_capture_before {
+                    if self.mouse_capture {
+                        execute!(terminal.backend_mut(), EnableMouseCapture)?;
+                    } else {
+                        execute!(terminal.backend_mut(), DisableMouseCapture)?;
+                    }
+                }
+                if should_quit {
+                    break;
                 }
             }
         }
@@ -373,6 +389,10 @@ impl Dashboard {
                     self.last_auto_refresh = Instant::now();
                     self.refresh(self.tx.clone(), true);
                 }
+                false
+            }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                self.mouse_capture = !self.mouse_capture;
                 false
             }
             KeyCode::Char('w') => {
@@ -591,9 +611,9 @@ impl Dashboard {
         frame.render_widget(
             Paragraph::new(if self.detail_focus {
                 if self.show_prompts {
-                    "↑↓/jk prompt · Enter expand · p requests · ^U/^D or wheel scroll · Esc back · q quit"
+                    "↑↓/jk prompt · Enter expand · p requests · ^U/^D scroll · m mouse · Esc back · q quit"
                 } else {
-                    "↑↓/jk request · Enter inspect · p prompts · ^U/^D or wheel scroll · Esc back · q quit"
+                    "↑↓/jk request · Enter inspect · p prompts · ^U/^D scroll · m mouse · Esc back · q quit"
                 }
             } else {
                 "↑↓/jk or ←→/hl select · Enter requests · p prompts · w window · r refresh · q quit"
@@ -2246,6 +2266,12 @@ mod tests {
             ..mouse
         });
         assert_eq!(dashboard.detail_scroll, 0);
+
+        assert!(dashboard.mouse_capture);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(!dashboard.mouse_capture);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Char('M'), KeyModifiers::NONE));
+        assert!(dashboard.mouse_capture);
     }
 
     #[test]

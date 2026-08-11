@@ -16,7 +16,7 @@
     <rect x="18" y="52" width="1164" height="52" fill="#1b1d29" stroke="#45485d"/>
     <text x="36" y="84" fill="#8ed1c5" font-size="20" font-weight="700">agentusage</text>
     <text x="182" y="84" fill="#f7f2f4" font-size="15">5 providers · Codex Detail · 7 Days · ready</text>
-    <text x="1158" y="84" fill="#8b8fa5" font-size="12" text-anchor="end">↑↓ prompt · Enter expand · p requests · ^U/^D or wheel scroll · Esc back</text>
+    <text x="1158" y="84" fill="#8b8fa5" font-size="12" text-anchor="end">↑↓ prompt · Enter expand · p requests · ^U/^D scroll · m mouse · Esc back</text>
 
     <rect x="18" y="118" width="1164" height="116" rx="8" fill="url(#panel)" stroke="#e9b4c9"/>
     <text x="38" y="145" fill="#d8d9e8" font-size="13" font-weight="700">Daily token trend · 2026-07-15 to 2026-07-21</text>

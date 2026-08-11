@@ -133,6 +133,7 @@ Keyboard controls:
 | `p` in detail | Switch between recent requests and prompts |
 | `Enter` in detail | Toggle metadata or full prompt text for the selected row |
 | `PageUp` / `PageDown`, `Ctrl+U` / `Ctrl+D`, mouse wheel | Scroll provider detail |
+| `m` | Toggle mouse capture; turn it off to select and copy text with the terminal |
 | `w` | Cycle through time windows |
 | `r` | Refresh |
 | `Esc` | Close request detail or return to the grid |
@@ -147,6 +148,10 @@ terminal dashboard requires an interactive terminal.
 PageUp/PageDown remain supported where available. On macOS keyboards, use
 `Ctrl+U`/`Ctrl+D` for a page-sized scroll, the mouse wheel for smaller steps,
 or `Ctrl+B`/`Ctrl+F` for larger jumps. `Space` and `b` also move down and up.
+
+If your macOS terminal does not let Option/Shift bypass mouse reporting, press
+`m` to disable mouse capture, select the rendered text normally, and copy it
+with `Cmd+C`. Press `m` again to restore mouse-wheel scrolling.
 
 ## Prompt history
 

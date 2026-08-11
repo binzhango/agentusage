@@ -98,6 +98,8 @@ provider. In detail view, press `p` to switch between requests and prompts,
 use `j`/`k` to select a row, and press `Enter` to inspect its full details.
 Scroll with `Ctrl+U`/`Ctrl+D` or the mouse wheel; `Ctrl+B`/`Ctrl+F` jump
 farther, and `Space`/`b` move down/up.
+Press `m` to toggle mouse capture when you need native terminal text selection
+and `Cmd+C` copying; press it again to restore mouse-wheel scrolling.
 
 ![Agentusage interactive terminal dashboard](docs/images/terminal-dashboard.svg)
 
