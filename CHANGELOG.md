@@ -8,6 +8,8 @@ The release workflow updates this file automatically when `main` is released.
 
 Changes that have not been released yet.
 
+## [1.6.0] - 2026-08-11
+
 ### Added
 
 - Added flexible TUI prompt-history navigation: direct `p` access from the
