@@ -38,14 +38,11 @@ Before merging a release change to `main`:
 
 ## Automatic release
 
-The [release workflow](../.github/workflows/release.yml) publishes to crates.io automatically when a push to `main` changes `src/`, `Cargo.toml`, or `Cargo.lock`. It bumps the minor version, verifies the source, commits the version and changelog, and tags the revision. Platform jobs build that revision and attach archives and SHA-256 checksums to the GitHub release. Pull-request CI still runs for documentation and workflow changes.
+The [release workflow](../.github/workflows/release.yml) publishes to crates.io automatically when a push to `main` changes `src/`, `Cargo.toml`, or `Cargo.lock`. It bumps the minor version, verifies the source, commits the version and changelog, and tags the revision. An Ubuntu job creates the GitHub release from that tag and its changelog entry. GitHub provides the source ZIP and tar.gz automatically. The separate CI workflow tests the project on Linux, macOS, and Windows.
 
 ### Recover an existing GitHub release
 
-If the crate publish succeeded and a platform build failed, open **Actions → Automatic Release → Run workflow**. Select `main` to use the current runners. Enter the full SHA of the existing `chore(release): v… [skip ci]` commit on `main`. The manual run builds all four archives from that commit and reads its dated changelog entry. It skips the version bump and crates.io publish. If the original run never pushed a tag, the GitHub release creates it at the supplied commit.
-
-After the workflow completes, download an archive for one target platform and
-verify its checksum before publishing installation instructions.
+If the crate publish succeeded and the GitHub release is missing, open **Actions → Automatic Release → Run workflow**. Select `main` and enter the full SHA of the existing `chore(release): v… [skip ci]` commit. The manual run uses its dated changelog entry and skips the version bump and crates.io publish. If the tag is missing, GitHub creates it at the supplied commit.
 
 GitHub repository setup:
 
@@ -53,21 +50,11 @@ GitHub repository setup:
 2. Add it as an Actions secret named `CARGO_REGISTRY_TOKEN`.
 3. Keep Actions enabled with workflow write permission for the repository.
 
-The workflow builds these targets:
-
-- `aarch64-apple-darwin`
-- `x86_64-unknown-linux-gnu`
-- `aarch64-unknown-linux-gnu`
-- `x86_64-pc-windows-msvc`
-
-The release workflow uses sparse checkout and Cargo package exclusion. Local
-agent instruction files (`AGENTS.md`, `.agents/`, and `.codex/`) and the local
-reference subtree are not packaged, compiled, uploaded, or included in release
-archives.
+The GitHub source archives contain the files tracked at the tag. Cargo package exclusions apply to the crates.io download. Keep private data and local reference repositories outside version control.
 
 ## Release smoke tests
 
-On each target, verify:
+After installing from source, verify the local executables.
 
 ```bash
 agentusage --help

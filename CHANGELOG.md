@@ -8,6 +8,8 @@ The release workflow updates this file automatically when `main` is released.
 
 Changes that have not been released yet.
 
+- GitHub releases provide source ZIP and tar.gz downloads. Install the executables with Cargo from crates.io or from the extracted source.
+
 ## [1.8.0] - 2026-11-24
 
 - Maintenance release
