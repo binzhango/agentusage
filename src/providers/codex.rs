@@ -564,7 +564,14 @@ fn counters(value: &Value) -> Counters {
             "cacheReadTokens",
         ],
     );
-    let cache_write = number_any(usage, &["cache_write_tokens", "cacheWriteTokens"]);
+    let cache_write = number_any(
+        usage,
+        &[
+            "cache_write_input_tokens",
+            "cache_write_tokens",
+            "cacheWriteTokens",
+        ],
+    );
     let reported_total = number_any(usage, &["total_tokens", "totalTokens", "total"]);
     Counters {
         input,
@@ -625,12 +632,15 @@ fn classify_client(source: Option<&str>, originator: Option<&str>) -> String {
     }
 }
 
+pub(crate) fn has_cost_estimate(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.contains("gpt-5") || model.contains("codex")
+}
+
 fn estimate_cost(model: &str, usage: Counters) -> f64 {
     // Codex subscription usage is not an invoice. This is an API-equivalent
     // estimate using the current GPT-5 family rate assumption.
-    if !model.to_ascii_lowercase().contains("gpt-5")
-        && !model.to_ascii_lowercase().contains("codex")
-    {
+    if !has_cost_estimate(model) {
         return 0.0;
     }
     (usage.input as f64 * 1.25 + usage.cached as f64 * 0.125 + usage.output as f64 * 10.0)
@@ -732,6 +742,18 @@ mod tests {
     use std::io::Write;
 
     use crate::storage::{PromptQuery, UsageStore, sqlite::SqliteStore};
+
+    #[test]
+    fn reads_cache_write_input_tokens_from_codex_rollouts() {
+        let usage = serde_json::json!({"info":{"total_token_usage":{
+            "input_tokens": 100, "cached_input_tokens": 60, "cache_write_input_tokens": 12
+        }}});
+        let parsed = counters(&usage);
+        assert_eq!(
+            (parsed.cached, parsed.cache_write, parsed.total),
+            (60, 12, 100)
+        );
+    }
 
     #[test]
     fn retrieves_codex_user_prompts_from_preserved_events() {

@@ -17,24 +17,23 @@ All supported routes use `GET`.
 
 | Endpoint | Content type | Purpose |
 | --- | --- | --- |
-| `/` | `text/html; charset=utf-8` | Main browser dashboard |
-| `/provider/<name>` | `text/html; charset=utf-8` | Full-page provider dashboard |
+| `/` | `text/html; charset=utf-8` | Usage timeline across visible providers |
+| `/provider/<name>` | `text/html; charset=utf-8` | Model timeline, usage breakdown, and prompt history |
 | `/api/providers` | `application/json` | Provider names and storage availability |
 | `/api/summary` | `application/json` | Aggregate usage for one provider and window |
-| `/api/trend` | `application/json` | Daily totals and per-model trend data |
-| `/api/events` | `application/json` | Paginated request-level usage events |
+| `/api/trend` | `application/json` | Daily or hourly totals by model |
+| `/api/events` | `application/json` | Paginated normalized usage events |
 | `/api/events/<event-id>` | `application/json` | One event with its raw source payload |
 | `/api/prompts` | `application/json` | Paginated, searchable user prompts |
 | `/api/prompts/<prompt-id>` | `application/json` | One normalized user prompt |
 
-Unsupported API routes return a structured JSON `404`. Unsupported browser
-routes return the plain-text body `not found`.
+Both browser pages accept the `window` parameter. For example, `/provider/codex?window=30d` opens the thirty-day Codex view. The HTML loads JavaScript and CSS from the binary’s embedded `/assets/` routes. Unsupported API routes return a structured JSON `404`.
 
 ## `GET /api/providers`
 
 Returns every provider known to the server. `available` is `true` when
 Agentusage can open initialized SQLite or PostgreSQL storage for the provider.
-It does not mean the selected time window contains events.
+An available provider can still have zero usage in a selected period.
 
 ```bash
 curl 'http://127.0.0.1:8787/api/providers'
@@ -62,7 +61,7 @@ Returns aggregate usage for one provider and time window.
 | `window` | No | `today` | `today`, `7d`, `30d`, `all` |
 
 ```bash
-curl 'http://127.0.0.1:8787/api/summary?provider=codex&window=30d'
+curl 'http://127.0.0.1:8787/api/summary?provider=codex&window=7d'
 ```
 
 ### Response fields
@@ -99,29 +98,32 @@ read/write input is additive while reasoning is an output breakdown. OpenCode,
 Copilot, and Pi component counters are additive when their source omits a total.
 An explicit provider total always wins.
 
-Abbreviated response:
+The Codex dashboard calculates **Cached input** as `100 × cache_read_tokens / input_tokens` over the window. It shows a dash for zero input. Both the summary and the model buckets retain `cache_write_tokens` in JSON, including when the UI hides a zero metric or column. Missing source cache counters normalize to zero, so JSON alone cannot distinguish an omitted counter from an explicit zero.
+
+Abbreviated seven-day Codex response from sample data (one model shown):
 
 ```json
 {
-  "from": "2026-06-22T04:00:00Z",
-  "to": "2026-07-22T04:00:00Z",
-  "sessions": 18,
-  "requests": 246,
-  "prompts": 91,
-  "input_tokens": 315000,
-  "output_tokens": 42000,
-  "reasoning_tokens": 12000,
-  "cache_read_tokens": 98000,
-  "cache_write_tokens": 7000,
-  "total_tokens": 474000,
-  "cost_usd": 3.82,
+  "from": "2026-11-17T05:00:00Z",
+  "to": "2026-11-24T05:00:00Z",
+  "sessions": 20,
+  "requests": 125,
+  "prompts": 6,
+  "input_tokens": 1969032,
+  "output_tokens": 10000,
+  "reasoning_tokens": 0,
+  "cache_read_tokens": 599421,
+  "cache_write_tokens": 0,
+  "total_tokens": 1979032,
+  "cost_usd": 2.846008,
   "models": {
-    "gpt-5": {
-      "requests": 180,
-      "input_tokens": 250000,
-      "output_tokens": 35000,
-      "total_tokens": 394000,
-      "cost_usd": 3.21
+    "gpt-5.4-mini": {
+      "requests": 46,
+      "input_tokens": 727116,
+      "output_tokens": 3680,
+      "cache_read_tokens": 223619,
+      "cache_write_tokens": 0,
+      "total_tokens": 730796
     }
   }
 }
@@ -132,48 +134,53 @@ has no data.
 
 ## `GET /api/trend`
 
-Returns one point for every local calendar day in the selected window,
-including zero-usage days. It accepts the same `provider`, `window`, and
-defaults as `/api/summary`.
+Returns time buckets in chronological order. Use the same `provider` and `window` values as `/api/summary`.
+
+| `interval` | Allowed windows | Buckets returned |
+| --- | --- | --- |
+| `day` (default) | `today`, `7d`, `30d`, `all` | One per local calendar day, including days with zero usage. The `all` chart covers the latest 90 days. |
+| `hour` | `today` | One per elapsed hour from local midnight, including the hour in progress and hours with zero usage. |
 
 ```bash
-curl 'http://127.0.0.1:8787/api/trend?provider=codex&window=30d'
+curl 'http://127.0.0.1:8787/api/trend?provider=codex&window=today&interval=hour'
+curl 'http://127.0.0.1:8787/api/trend?provider=codex&window=7d'
 ```
 
 | Field | Type | Meaning |
 | --- | --- | --- |
+| `bucket_start` | RFC 3339 timestamp | Start of the interval in UTC |
 | `date` | `YYYY-MM-DD` string | Local calendar date |
-| `total_tokens` | integer | Total tokens for the day |
-| `input_tokens` | integer | Input tokens for the day |
-| `output_tokens` | integer | Output tokens for the day |
-| `cache_read_tokens` | integer | Cache-read tokens for the day |
-| `models` | object | Daily total tokens keyed by model |
+| `total_tokens` | integer | Total tokens for the interval |
+| `input_tokens` | integer | Input tokens for the interval |
+| `output_tokens` | integer | Output tokens for the interval |
+| `cache_read_tokens` | integer | Cache-read tokens for the interval |
+| `models` | object | Total tokens keyed by model |
+
+First daily bucket from the seven-day sample, shown as a one-element excerpt:
 
 ```json
 [
   {
-    "date": "2026-07-21",
-    "total_tokens": 48210,
-    "input_tokens": 31140,
-    "output_tokens": 7070,
-    "cache_read_tokens": 10000,
+    "bucket_start": "2026-11-17T05:00:00Z",
+    "date": "2026-11-17",
+    "input_tokens": 470840,
+    "output_tokens": 2160,
+    "cache_read_tokens": 138797,
+    "total_tokens": 473000,
     "models": {
-      "gpt-5": 36100,
-      "gpt-5-mini": 12110
+      "gpt-5.4-mini": 212388,
+      "gpt-5.5": 142824,
+      "gpt-6.2-sol": 117788
     }
   }
 ]
 ```
 
-For `today`, `7d`, and `30d`, the trend covers the summary period. For `all`,
-the summary starts at 1970-01-01 while the trend is limited to the latest 90
-days.
+Use `bucket_start` to align provider rows and distinguish hours that share a local date. Summing the `all` trend gives the latest 90 days. Use `/api/summary?provider=codex&window=all` for lifetime totals. An unsupported interval or `interval=hour` with a longer window returns HTTP `400` with error code `invalid_interval`.
 
 ## `GET /api/events`
 
-Returns normalized usage events newest first. Pagination uses a compound
-timestamp/event-ID cursor, so events with identical timestamps are neither
-skipped nor repeated.
+Returns normalized usage events newest first, including rows with `requests = 0` such as prompt events. The TUI’s recent-request list selects rows with a positive request count. Pagination orders by timestamp and event ID so events sharing a timestamp have a stable order.
 
 | Parameter | Required | Default | Meaning |
 | --- | --- | --- | --- |
@@ -238,7 +245,8 @@ Returns one event and adds its preserved `raw_payload`. The canonical provider
 must be supplied when the event is not from Codex.
 
 ```bash
-curl 'http://127.0.0.1:8787/api/events/5f...?provider=codex'
+# Set event_id to an event_id from the list response.
+curl "http://127.0.0.1:8787/api/events/${event_id}?provider=codex"
 ```
 
 The raw payload can contain prompts, paths, identifiers, or other sensitive
@@ -293,9 +301,7 @@ Code, OpenCode, and Pi histories can contain prompt bodies. Current Copilot
 usage sources expose counters and request metadata but not the original prompt
 text, so its prompt list may be empty.
 
-After upgrading an existing installation, run `au sync <provider>` once before
-querying this endpoint so prompt records from earlier local history are indexed.
-Synchronization is incremental and safe to repeat.
+The browser requests three prompts per page from the provider list and ten from a provider page. Both views support search and pagination. Direct API clients can choose their own page size.
 
 ## `GET /api/prompts/<prompt-id>`
 
@@ -303,7 +309,8 @@ Returns one normalized prompt. Supply its canonical provider when it is not
 Codex.
 
 ```bash
-curl 'http://127.0.0.1:8787/api/prompts/7c...?provider=claude_code'
+# Set prompt_id to an event_id from the Claude Code prompt list.
+curl "http://127.0.0.1:8787/api/prompts/${prompt_id}?provider=claude_code"
 ```
 
 Prompt text can contain source code, credentials pasted into a conversation,

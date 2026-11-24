@@ -6,46 +6,21 @@ the [README](../README.md).
 
 ## Synchronize provider data
 
-Agentusage imports the local history already maintained by each supported
-coding agent:
+Choose a provider you use and import its local history. For Codex Desktop and CLI sessions, run
 
 ```bash
 au sync codex
-au sync claude_code
-au sync opencode
-au sync copilot
-au sync pi
 ```
 
-Each provider uses a separate normalized database. Synchronization is
-incremental and idempotent, so the commands are safe to run repeatedly.
+The other provider names are `claude_code`, `opencode`, `copilot`, and `pi`. On first use, run sync in an interactive terminal and select a storage backend. SQLite creates a database per provider. PostgreSQL stores records from multiple providers in a shared schema.
 
-A provider that has not been synchronized may appear as unavailable:
-
-```text
-no initialized SQLite or PostgreSQL usage storage found;
-run `agentusage sync opencode` after selecting a database backend
-```
-
-Run the suggested command when you use that provider. Otherwise, hide its card
-from the browser dashboard.
-
-After upgrading to a build that adds prompt history, synchronize each provider
-once so existing source history is indexed. Synchronization is idempotent and
-does not modify the original agent history:
-
-```bash
-au sync codex
-au sync claude_code
-au sync opencode
-au sync pi
-```
-
-To import from a non-default source directory:
+Codex reads rollout files recursively under `~/.codex/sessions/`. If your sessions are in another directory, pass it for that import:
 
 ```bash
 au sync codex --sessions-dir /path/to/codex/sessions
 ```
+
+Sync reads the original files and updates derived storage. You can rerun it as files grow. If a provider shows **Unavailable**, run `au sync <provider>` in a terminal to see its storage status. For an old schema or a dashboard missing recent sessions, see [Configuration](CONFIGURATION.md#automatic-synchronization).
 
 ## Browser dashboard
 
@@ -75,46 +50,33 @@ The page is embedded directly in the Rust binary. It does not require a
 separate frontend server, Node.js runtime, hosted account, or external chart
 service.
 
-### Dashboard features
+### Read the activity chart
 
-Every available provider includes:
+| Window | Timeline | Provider totals |
+| --- | --- | --- |
+| Today | Local midnight through the current hour, in hourly buckets | Today |
+| 7 days or 30 days | One point per day, including today | Selected period |
+| All time | Daily activity over the latest 90 days | Full stored history |
 
-- tokens, requests, sessions, and estimated cost;
-- daily total and per-model trend lines;
-- hover details with model, date, and token count;
-- input, output, cache-read, cache-write, and total-token tables;
-- recent prompt previews with expandable full text and pagination;
-- prompt search in full-page provider views;
-- a dedicated full-page provider view;
-- downloadable SVG snapshots;
-- light and dark themes.
+The blue line shows tokens summed across visible providers. The marker starts at the peak. Point to another time or focus the chart and press the left or right arrow to read its exact token count. `Home` and `End` jump to the first and last bucket.
 
-The main page supports hiding provider cards. Hidden cards are remembered in
-the browser and can be restored individually or all at once from the header
-dropdown.
+Each colored row shares the time axis. Filled cells indicate activity and darker cells indicate larger token counts. Select a row to isolate its provider, then select it again to restore the total. Select the provider **name in the list below** to open its page, where rows represent models. You can bookmark the provider and range together, for example `/provider/codex?window=30d`.
 
-Prompt bodies are opt-in: select `Show prompts` on a provider card to retrieve
-them from local storage. Full-page provider views also provide prompt search
-and paginated loading.
+Use **Hide provider** in the provider actions menu to remove it from the overview and its aggregate chart. Use **Show hidden** above the provider list to restore it. The browser remembers visibility and theme.
 
-Time-range controls include `Today`, `7 Days`, `30 Days`, and `All Time`.
-All-time summaries use complete history, while all-time trend charts show the
-latest 90 days to remain readable and inexpensive.
+### Read the Codex cache breakdown
 
-### Export a provider card
+**Cached input** is the share of input tokens served from cache over the selected period. Agentusage divides total cache-read tokens by total input tokens across requests. For example, 7,500 cached tokens out of 10,000 input tokens gives **75%**. A dash means there were no input tokens in the period.
 
-Select a time range and choose `Download SVG` on a provider card. The export
-includes the summary metrics, chart, legend, provider breakdown when present,
-and model table. Files use names such as:
+The model table shows exact cache-read counts. The **Cache write** summary appears when Codex records a positive write count in the period. The table adds the **Cache write** column when at least one model records writes. A period can have substantial cache reads and zero reported writes. The [summary API](API.md#response-fields) exposes the underlying counters, including zeros.
 
-```text
-agentusage-codex-7d.svg
-```
+### Export a provider report
 
-SVG files can be opened in current browsers, Preview, Figma, and most design
-tools. Generation happens entirely in the browser.
+Choose **Download SVG** from the provider actions menu or its full page. The export includes period totals, model trend lines, a legend, and usage tables. It follows the same Codex cache-display rules as the page. The prompt count is included, and prompt text stays in the history view. SVG files open offline.
 
-![A provider usage card downloaded as a standalone SVG image](images/svg-export.svg)
+This seven-day report was exported from a dashboard using sample data.
+
+![Sample Codex SVG report with cached input percentage and exact cache reads for each model](images/svg-export.svg)
 
 ## Terminal dashboard
 
@@ -124,39 +86,28 @@ Start the interactive terminal UI:
 au dashboard
 ```
 
-Keyboard controls:
+Select a provider in the overview to see its models and, when there is room, its projects. In a terminal at least 110 columns wide, the recent-request list appears to the right. On narrower terminals, press `Enter` to open it. Press `Enter` on a request to inspect its model, tokens, status, source, and timing when available.
 
-| Key | Action |
+The **Week** and **30 Days** windows show trends when space permits. Each bar covers one day for Week or three days for 30 Days. The provider report includes spending by period and model, client, and project breakdowns. In the overview, a dash in the estimated-cost column means pricing is missing for the recorded usage. An asterisk marks a subtotal with unpriced models.
+
+| Keys | Action |
 | --- | --- |
-| `↑` / `↓`, `j` / `k` | Select a provider, recent request, or prompt |
-| `Enter` / `Tab` | Open provider detail or return to the grid |
-| `p` in detail | Switch between recent requests and prompts |
-| `Enter` in detail | Toggle metadata or full prompt text for the selected row |
-| `PageUp` / `PageDown`, `Ctrl+U` / `Ctrl+D`, mouse wheel | Scroll provider detail |
-| `m` | Toggle mouse capture; turn it off to select and copy text with the terminal |
-| `1` / `2` / `3` / `4` | Select Today / Week / 30 Days / All |
-| `w` | Cycle through date ranges |
-| `r` | Refresh |
-| `Esc` | Close request detail or return to the grid |
-| `q` | Quit from any view |
+| `↑` / `↓`, `j` / `k` | Select a row or scroll an open record |
+| `←` / `→`, `h` / `l` | Switch provider |
+| `Enter` | Open requests, inspect a selected row, or close its detail |
+| `Tab` | Switch between provider and request views |
+| `p` | Open prompt history for the selected provider, or switch back to requests |
+| `v` | Open or close the provider usage report |
+| `1` / `2` / `3` / `4`, `w` | Select Today / Week / 30 Days / All, or cycle windows |
+| `PageUp` / `PageDown`, mouse wheel | Move through the list or detail |
+| `Ctrl+U` / `Ctrl+D`, `b` / `Space` | Move eight rows up or down |
+| `Ctrl+B` / `Ctrl+F`, `Home` / `End` | Move twenty rows, or jump to the beginning or end |
+| `r` | Synchronize and refresh |
+| `m` | Toggle mouse capture for terminal text selection |
+| `?`, `Esc` / `Backspace` | Show shortcuts, or go back one level |
+| `q` / `Ctrl+C` | Quit |
 
-The detail view includes a daily token sparkline, provider/model breakdowns,
-the 25 most recent normalized requests, and the 25 most recent retrievable user
-prompts. Timestamps are shown in the machine's local timezone. Prompt bodies
-remain local and are available only when the provider persists them. The
-terminal dashboard requires an interactive terminal.
-
-The active range is highlighted in the persistent header selector. A bordered,
-high-contrast keyboard panel remains visible at the bottom and adapts its
-shortcuts to the provider grid, request list, or prompt list.
-
-PageUp/PageDown remain supported where available. On macOS keyboards, use
-`Ctrl+U`/`Ctrl+D` for a page-sized scroll, the mouse wheel for smaller steps,
-or `Ctrl+B`/`Ctrl+F` for larger jumps. `Space` and `b` also move down and up.
-
-If your macOS terminal does not let Option/Shift bypass mouse reporting, press
-`m` to disable mouse capture, select the rendered text normally, and copy it
-with `Cmd+C`. Press `m` again to restore mouse-wheel scrolling.
+Request and prompt lists each show up to 25 records for the active window. Timestamps use local time. On macOS, press `m` to release mouse capture, select text, and copy with `Cmd+C`.
 
 ## Prompt history
 
@@ -166,40 +117,17 @@ results, and provider metadata messages from prompt results.
 
 | Provider | Prompt source | Availability |
 | --- | --- | --- |
-| `codex` | User messages in rollout JSONL | Supported |
+| `codex` | Recognized user-message events in rollout JSONL, such as `event_msg` with a `user_message` payload | Supported |
 | `claude_code` | Non-metadata user messages in session JSONL | Supported |
 | `opencode` | Text parts associated with user messages | Supported |
 | `pi` | User messages in append-only session JSONL | Supported |
 | `copilot` | Copilot CLI databases and VS Code logs | Not exposed by the current local sources |
 
-In the browser, choose `Show prompts` on a provider card. Open the full provider
-page to search prompt text and load older pages. Prompt text is not requested
-by the page before that explicit action and is not included in downloaded SVG
-card snapshots.
+**Browser.** Choose **Prompt history** beside a provider or **Show prompts** on its page. Both views can search, expand a prompt, and load older results within the selected window. The overview loads three prompts per page and the provider page loads ten. The browser first requests prompt text when you open history.
 
-In the terminal dashboard, open a provider and press `p`. Use `j`/`k` or the
-arrow keys to select a prompt, then press `Enter` to expand its full text and
-source metadata. The list follows the dashboard's active time window and shows
-up to 25 recent prompts.
+**Terminal.** Select a provider and press `p`. Use `j` / `k` or the arrow keys to select a prompt, then `Enter` to read its full text and available source metadata. Press `4` to widen the window to All.
 
-Prompt records can include a timestamp, model, session, project, provider
-source, and source locator. Some providers do not persist every field, so
-optional metadata can be empty. Search is a case-insensitive substring match.
-
-Prompt text can contain source code, credentials pasted into an agent, file
-paths, or other confidential data. The server is loopback-only and marks API
-responses `Cache-Control: no-store`, but any local process or person with access
-to the database can read stored prompts. Protect normalized databases and avoid
-copying prompt API responses into bug reports or release artifacts.
-
-If prompt history is empty for a supported provider:
-
-1. Confirm the selected time window contains user messages.
-2. Run `au sync <provider>` again to index existing source history.
-3. Confirm the provider's original history still contains textual user
-   messages; deleted or tool-only records cannot be reconstructed.
-4. Use `/api/prompts?provider=<provider>&window=all` to distinguish missing data
-   from a TUI or browser filter.
+If history is empty, check the selected period and provider, run `au sync <provider>`, and confirm the original source contains a supported textual user message. Token activity can exist in a session that provides no retrievable user prompts. The [prompts endpoint](API.md#get-apiprompts) can search the stored history directly. Prompt text and raw events can contain private material.
 
 ## CLI reports
 
@@ -221,31 +149,22 @@ au yearly --provider claude_code --year 2026
 au range --provider pi --from 2026-07-01 --to 2026-07-19
 ```
 
-Reports may include:
+The CLI prints request and session counts, token and cache counters, estimated cost, cache-hit rate, code changes, AI credits, and model, client, and project breakdowns. The weekly report covers the Monday through Sunday containing `--date`. Dashboard **Week** and **7 days** cover the seven days ending today.
 
-- requests, prompts, sessions, lines added, and lines removed;
-- input, output, reasoning, cache-read, cache-write, and total tokens;
-- estimated cost and cache-hit rate;
-- model and client breakdowns;
-- project or workspace breakdowns;
-- tool-call and language breakdowns;
-- Copilot AI credits and provider-native AI units.
-
-Available command help:
+For example, these lines come from `au weekly --provider pi --date 2026-11-23` on sample data:
 
 ```text
-agentusage --help
-agentusage dashboard --help
-agentusage server --help
-agentusage sync --help
-agentusage daily --help
-agentusage weekly --help
-agentusage monthly --help
-agentusage yearly --help
-agentusage range --help
+input tokens         103774
+output tokens        960
+reasoning tokens     0
+cached input tokens  47175
+cache write tokens   6007
+total tokens         157916
+estimated cost       $0.315832
+cache hit rate       30.06%
 ```
 
-Running `agentusage` without a subcommand prints the top-level help.
+Run `au <command> --help` for the available options. Running `au` by itself prints the command list.
 
 ## Pi coding agent
 
@@ -254,12 +173,7 @@ model interface. Agentusage reads its append-only JSONL sessions and imports
 prompts, assistant requests, input and output tokens, cache activity, reported
 cost, models, projects, and tool calls.
 
-Pi is shown as one agent card even when a session switches providers. Model
-identities include the provider, for example:
-
-```text
-openai-codex:gpt-5.6-luna
-```
+Pi appears as one provider row even when a session switches between upstream providers. Its model names include the upstream provider, as in `openai-codex:gpt-5.6-luna`.
 
 Synchronize and report Pi usage with:
 

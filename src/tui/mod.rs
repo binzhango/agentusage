@@ -1,3 +1,6 @@
+mod activity;
+mod overview;
+
 use std::{
     io,
     sync::mpsc,
@@ -79,7 +82,6 @@ impl Window {
 struct ProviderData {
     name: String,
     loading: bool,
-    updating: bool,
     sessions: i64,
     requests: i64,
     prompts: i64,
@@ -106,7 +108,7 @@ struct ProviderData {
     primary_used_percent: Option<f64>,
     primary_window_minutes: Option<i64>,
     desktop_signal: Option<(i64, i64)>,
-    trend: Vec<crate::storage::DailyUsagePoint>,
+    trend: Vec<crate::storage::UsageTrendPoint>,
     events: Vec<crate::storage::UsageEventDetail>,
     prompt_events: Vec<crate::storage::PromptDetail>,
     error: Option<String>,
@@ -115,6 +117,7 @@ struct ProviderData {
 #[derive(Debug, Clone, Default)]
 struct ModelUsage {
     name: String,
+    requests: i64,
     input_tokens: i64,
     output_tokens: i64,
     cache_read_tokens: i64,
@@ -195,24 +198,32 @@ pub fn run(update_notice: Option<crate::version_check::UpdateNotice>) -> Result<
     result
 }
 
+#[derive(Debug, Default)]
+enum View {
+    #[default]
+    Providers,
+    Requests,
+    Prompts,
+    Request(Box<crate::storage::UsageEventDetail>),
+    Prompt(Box<crate::storage::PromptDetail>),
+    Report,
+}
+
 struct Dashboard {
     backends: Vec<(String, crate::storage::BackendMode)>,
     snapshot: DashboardSnapshot,
     tx: mpsc::Sender<RefreshResult>,
     rx: mpsc::Receiver<RefreshResult>,
     selected: usize,
-    detail_focus: bool,
+    view: View,
+    help_open: bool,
     detail_scroll: u16,
     selected_event: usize,
-    show_event_detail: bool,
     selected_prompt: usize,
-    show_prompts: bool,
-    show_prompt_detail: bool,
     mouse_capture: bool,
     refreshing: bool,
     pending: usize,
     generation: u64,
-    queued_window: Option<Window>,
     startup_ingest_pending: bool,
     auto_sync: bool,
     auto_refresh_interval: Duration,
@@ -233,18 +244,15 @@ impl Dashboard {
             tx: tx.clone(),
             rx,
             selected: 0,
-            detail_focus: false,
+            view: View::Providers,
+            help_open: false,
             detail_scroll: 0,
             selected_event: 0,
-            show_event_detail: false,
             selected_prompt: 0,
-            show_prompts: false,
-            show_prompt_detail: false,
             mouse_capture: true,
             refreshing: false,
             pending: 0,
             generation: 0,
-            queued_window: None,
             startup_ingest_pending: config.auto_sync,
             auto_sync: config.auto_sync,
             auto_refresh_interval: config.refresh_interval,
@@ -260,8 +268,8 @@ impl Dashboard {
     fn refresh(&mut self, tx: mpsc::Sender<RefreshResult>, ingest: bool) {
         self.generation = self.generation.wrapping_add(1);
         let generation = self.generation;
-        self.refreshing = true;
         self.pending = self.backends.len();
+        self.refreshing = self.pending > 0;
         let window = self.snapshot.window;
         if self.snapshot.providers.is_empty() {
             self.snapshot.providers = self
@@ -273,16 +281,19 @@ impl Dashboard {
                     ..Default::default()
                 })
                 .collect();
-        } else if ingest {
-            for provider in &mut self.snapshot.providers {
-                provider.updating = true;
-            }
         }
         for (index, (name, backend)) in self.backends.clone().into_iter().enumerate() {
             let tx = tx.clone();
             thread::spawn(move || {
                 let (start, end) = window.dates();
-                let data = load_provider(&name, start, end, backend, ingest);
+                let data =
+                    load_provider(&name, start, end, backend, ingest).unwrap_or_else(|error| {
+                        ProviderData {
+                            name,
+                            error: Some(error.to_string()),
+                            ..Default::default()
+                        }
+                    });
                 let _ = tx.send(RefreshResult::Provider {
                     generation,
                     window,
@@ -303,18 +314,8 @@ impl Dashboard {
             }) = self.rx.try_recv()
             {
                 if generation == self.generation && window == self.snapshot.window {
-                    if let Some(provider) = self.snapshot.providers.get_mut(index) {
-                        *provider = data;
-                    }
+                    self.replace_provider(index, data);
                     self.snapshot.refreshed = SystemTime::now();
-                    self.selected = self
-                        .selected
-                        .min(self.snapshot.providers.len().saturating_sub(1));
-                    self.detail_scroll = 0;
-                    self.selected_event = 0;
-                    self.show_event_detail = false;
-                    self.selected_prompt = 0;
-                    self.show_prompt_detail = false;
                 }
                 if generation == self.generation {
                     self.pending = self.pending.saturating_sub(1);
@@ -323,11 +324,6 @@ impl Dashboard {
                         if self.startup_ingest_pending {
                             self.startup_ingest_pending = false;
                             self.refresh(self.tx.clone(), true);
-                        } else if let Some(window) = self.queued_window.take() {
-                            if window != self.snapshot.window {
-                                self.snapshot.window = window;
-                            }
-                            self.refresh(self.tx.clone(), false);
                         }
                     }
                 }
@@ -365,371 +361,225 @@ impl Dashboard {
         Ok(())
     }
 
+    fn replace_provider(&mut self, index: usize, data: ProviderData) {
+        let Some(old) = self.snapshot.providers.get_mut(index) else {
+            return;
+        };
+        if index == self.selected {
+            let event_id = match &self.view {
+                View::Request(event) => Some(&event.usage.event_id),
+                View::Requests => old
+                    .events
+                    .get(self.selected_event)
+                    .map(|event| &event.usage.event_id),
+                _ => None,
+            };
+            self.selected_event = event_id
+                .and_then(|id| data.events.iter().position(|e| &e.usage.event_id == id))
+                .unwrap_or(0);
+            let prompt_id = match &self.view {
+                View::Prompt(prompt) => Some(&prompt.usage.event_id),
+                View::Prompts => old
+                    .prompt_events
+                    .get(self.selected_prompt)
+                    .map(|p| &p.usage.event_id),
+                _ => None,
+            };
+            self.selected_prompt = prompt_id
+                .and_then(|id| {
+                    data.prompt_events
+                        .iter()
+                        .position(|p| &p.usage.event_id == id)
+                })
+                .unwrap_or(0);
+            // An open record remains readable even after it ages out of the recent list.
+            match &mut self.view {
+                View::Request(open) => {
+                    if let Some(event) = data.events.get(self.selected_event)
+                        && event.usage.event_id == open.usage.event_id
+                    {
+                        **open = event.clone();
+                    }
+                }
+                View::Prompt(open) => {
+                    if let Some(prompt) = data.prompt_events.get(self.selected_prompt)
+                        && prompt.usage.event_id == open.usage.event_id
+                    {
+                        **open = prompt.clone();
+                    }
+                }
+                _ => {}
+            }
+        }
+        *old = data;
+    }
+
+    fn set_view(&mut self, view: View) {
+        self.view = view;
+        self.detail_scroll = 0;
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> bool {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        if key.code == KeyCode::Char('q')
+            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+        {
             return true;
         }
-        match key.code {
-            KeyCode::Char('q') => true,
-            KeyCode::Esc | KeyCode::Backspace if self.show_prompt_detail => {
-                self.show_prompt_detail = false;
-                self.detail_scroll = 0;
-                false
+        if self.help_open {
+            if matches!(
+                key.code,
+                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Backspace | KeyCode::Enter
+            ) {
+                self.help_open = false;
             }
-            KeyCode::Esc | KeyCode::Backspace if self.show_prompts => {
-                self.show_prompts = false;
-                self.detail_scroll = 0;
-                false
-            }
-            KeyCode::Esc | KeyCode::Backspace if self.detail_focus => {
-                self.detail_focus = false;
-                self.show_event_detail = false;
-                self.show_prompt_detail = false;
-                false
-            }
-            KeyCode::Esc => true,
-            KeyCode::Char('r') => {
-                if !self.refreshing {
-                    self.last_auto_refresh = Instant::now();
-                    self.refresh(self.tx.clone(), true);
-                }
-                false
-            }
-            KeyCode::Char('m') | KeyCode::Char('M') => {
-                self.mouse_capture = !self.mouse_capture;
-                false
-            }
-            KeyCode::Char('w') => {
-                self.select_window(self.snapshot.window.next());
-                false
-            }
-            KeyCode::Char('1') => {
-                self.select_window(Window::Today);
-                false
-            }
-            KeyCode::Char('2') => {
-                self.select_window(Window::SevenDays);
-                false
-            }
-            KeyCode::Char('3') => {
-                self.select_window(Window::ThirtyDays);
-                false
-            }
-            KeyCode::Char('4') => {
-                self.select_window(Window::All);
-                false
-            }
-            KeyCode::Char('p') | KeyCode::Char('P') => {
-                if !self.detail_focus {
-                    self.detail_focus = true;
-                    self.show_prompts = true;
-                } else {
-                    self.show_prompts = !self.show_prompts;
-                }
-                self.show_event_detail = false;
-                self.show_prompt_detail = false;
-                self.detail_scroll = 0;
-                false
-            }
-            KeyCode::Left | KeyCode::Char('h') => {
-                self.move_provider(-1);
-                false
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                self.move_provider(1);
-                false
-            }
-            KeyCode::Enter if self.detail_focus => {
-                if self.show_prompts {
-                    self.show_prompt_detail = !self.show_prompt_detail;
-                } else {
-                    self.show_event_detail = !self.show_event_detail;
-                }
-                false
-            }
-            KeyCode::Tab | KeyCode::Enter => {
-                self.detail_focus = !self.detail_focus;
-                self.show_event_detail = false;
-                self.show_prompt_detail = false;
-                false
-            }
-            KeyCode::Up | KeyCode::Char('k') if self.detail_focus => {
-                if self.show_prompts {
-                    self.selected_prompt = self.selected_prompt.saturating_sub(1);
-                } else {
-                    self.selected_event = self.selected_event.saturating_sub(1);
-                }
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') if self.detail_focus => {
-                if let Some(provider) = self.snapshot.providers.get(self.selected) {
-                    if self.show_prompts && !provider.prompt_events.is_empty() {
-                        self.selected_prompt =
-                            (self.selected_prompt + 1).min(provider.prompt_events.len() - 1);
-                    } else if !self.show_prompts && !provider.events.is_empty() {
-                        self.selected_event =
-                            (self.selected_event + 1).min(provider.events.len() - 1);
-                    }
-                }
-                false
-            }
-            KeyCode::PageUp if self.detail_focus => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(5);
-                false
-            }
-            KeyCode::PageDown if self.detail_focus => {
-                self.detail_scroll = self.detail_scroll.saturating_add(5);
-                false
-            }
-            KeyCode::Char('u')
-                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.detail_scroll = self.detail_scroll.saturating_sub(8);
-                false
-            }
-            KeyCode::Char('d')
-                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.detail_scroll = self.detail_scroll.saturating_add(8);
-                false
-            }
-            KeyCode::Char('b')
-                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.detail_scroll = self.detail_scroll.saturating_sub(20);
-                false
-            }
-            KeyCode::Char('f')
-                if self.detail_focus && key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.detail_scroll = self.detail_scroll.saturating_add(20);
-                false
-            }
-            KeyCode::Char(' ') if self.detail_focus => {
-                self.detail_scroll = self.detail_scroll.saturating_add(8);
-                false
-            }
-            KeyCode::Char('b') if self.detail_focus => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(8);
-                false
-            }
-            KeyCode::Home => {
-                self.detail_scroll = 0;
-                if self.detail_focus {
-                    self.selected_event = 0;
-                    self.selected_prompt = 0;
-                    self.show_event_detail = false;
-                    self.show_prompt_detail = false;
-                } else {
-                    self.selected = 0;
-                }
-                false
-            }
-            KeyCode::End => {
-                self.detail_scroll = u16::MAX;
-                if self.detail_focus {
-                    if let Some(provider) = self.snapshot.providers.get(self.selected) {
-                        self.selected_event = provider.events.len().saturating_sub(1);
-                        self.selected_prompt = provider.prompt_events.len().saturating_sub(1);
-                    }
-                    self.show_event_detail = false;
-                    self.show_prompt_detail = false;
-                } else {
-                    self.selected = self.snapshot.providers.len().saturating_sub(1);
-                }
-                false
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.selected = self.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !self.snapshot.providers.is_empty() {
-                    self.selected = (self.selected + 1).min(self.snapshot.providers.len() - 1);
-                }
-                false
-            }
-            _ => false,
+            return false;
         }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('?') => self.help_open = true,
+            KeyCode::Esc | KeyCode::Backspace => {
+                let parent = match self.view {
+                    View::Request(_) | View::Prompts => View::Requests,
+                    View::Prompt(_) => View::Prompts,
+                    View::Requests | View::Report => View::Providers,
+                    View::Providers => return key.code == KeyCode::Esc,
+                };
+                self.set_view(parent);
+            }
+            KeyCode::Char('r') if !self.refreshing => {
+                self.last_auto_refresh = Instant::now();
+                self.refresh(self.tx.clone(), true);
+            }
+            KeyCode::Char('m' | 'M') => self.mouse_capture = !self.mouse_capture,
+            KeyCode::Char('w') => self.select_window(self.snapshot.window.next()),
+            KeyCode::Char(n @ '1'..='4') => {
+                self.select_window(Window::all()[n as usize - '1' as usize])
+            }
+            KeyCode::Char('p' | 'P') => {
+                self.set_view(if matches!(self.view, View::Prompts | View::Prompt(_)) {
+                    View::Requests
+                } else {
+                    View::Prompts
+                })
+            }
+            KeyCode::Char('v') => self.set_view(if matches!(self.view, View::Report) {
+                View::Providers
+            } else {
+                View::Report
+            }),
+            KeyCode::Left | KeyCode::Char('h') => self.move_provider(-1),
+            KeyCode::Right | KeyCode::Char('l') => self.move_provider(1),
+            KeyCode::Tab => self.set_view(if matches!(self.view, View::Providers) {
+                View::Requests
+            } else {
+                View::Providers
+            }),
+            KeyCode::Enter => {
+                let provider = self.snapshot.providers.get(self.selected);
+                let next = match self.view {
+                    View::Providers => Some(View::Requests),
+                    View::Requests => provider
+                        .and_then(|p| p.events.get(self.selected_event))
+                        .cloned()
+                        .map(|e| View::Request(Box::new(e))),
+                    View::Prompts => provider
+                        .and_then(|p| p.prompt_events.get(self.selected_prompt))
+                        .cloned()
+                        .map(|p| View::Prompt(Box::new(p))),
+                    View::Request(_) => Some(View::Requests),
+                    View::Prompt(_) => Some(View::Prompts),
+                    View::Report => Some(View::Providers),
+                };
+                if let Some(view) = next {
+                    self.set_view(view);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::PageUp => self.move_selection(-5),
+            KeyCode::PageDown => self.move_selection(5),
+            KeyCode::Char('u') if ctrl => self.move_selection(-8),
+            KeyCode::Char('d') if ctrl => self.move_selection(8),
+            KeyCode::Char('f') if ctrl => self.move_selection(20),
+            KeyCode::Char('b') => self.move_selection(if ctrl { -20 } else { -8 }),
+            KeyCode::Char(' ') => self.move_selection(8),
+            KeyCode::Home => self.move_selection(-isize::MAX),
+            KeyCode::End => self.move_selection(isize::MAX),
+            _ => {}
+        }
+        false
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
-        if !self.detail_focus {
+        if self.help_open {
             return;
         }
         match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(3);
-            }
-            MouseEventKind::ScrollDown => {
-                self.detail_scroll = self.detail_scroll.saturating_add(3);
-            }
+            MouseEventKind::ScrollUp => self.move_selection(-3),
+            MouseEventKind::ScrollDown => self.move_selection(3),
             _ => {}
         }
     }
 
-    fn move_provider(&mut self, delta: isize) {
-        if self.snapshot.providers.is_empty() {
-            return;
-        }
-        let last = self.snapshot.providers.len().saturating_sub(1) as isize;
-        let next = (self.selected as isize + delta).clamp(0, last) as usize;
-        if next != self.selected {
-            self.selected = next;
-            self.detail_scroll = 0;
-            self.selected_event = 0;
-            self.selected_prompt = 0;
-            self.show_event_detail = false;
-            self.show_prompt_detail = false;
-        }
-    }
-
-    fn select_window(&mut self, window: Window) {
-        if window == self.snapshot.window {
-            return;
-        }
-        self.snapshot.window = window;
-        // A window switch must not wait behind a slow ingestion pass. Bump the
-        // generation and immediately query the cached store; any older worker
-        // result is discarded when it returns.
-        self.queued_window = None;
-        self.refresh(self.tx.clone(), false);
-    }
-
-    fn render(&self, frame: &mut Frame) {
-        let area = frame.area();
-        let header_height = if self.update_notice.is_some() { 4 } else { 3 };
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(header_height),
-                Constraint::Min(5),
-                Constraint::Length(4),
-            ])
-            .split(area);
-        let status = if self.refreshing {
-            "refreshing…"
-        } else {
-            "ready"
-        };
-        let mut header = vec![Line::from(vec![
-            Span::styled(
-                " agentusage ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(
-                "{} providers · Grid · {} · {}",
-                self.snapshot.providers.len(),
-                self.snapshot.window.label(),
-                status
-            )),
-        ])];
-        header.push(window_selector(self.snapshot.window));
-        if let Some(notice) = &self.update_notice {
-            header.push(Line::from(Span::styled(
-                format!(
-                    " Update available: v{} (running v{}) · {}",
-                    notice.latest, notice.current, notice.url
-                ),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
-        frame.render_widget(
-            Paragraph::new(header).block(Block::default().borders(Borders::BOTTOM)),
-            chunks[0],
-        );
-        if self.detail_focus {
-            self.render_detail_dashboard(frame, chunks[1]);
-        } else {
-            self.render_grid(frame, chunks[1]);
-        }
-        self.render_shortcut_footer(frame, chunks[2]);
-    }
-
-    fn render_shortcut_footer(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .title(" Controls ")
-            .title_style(
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-
-        if area.width < 100 {
-            frame.render_widget(
-                Paragraph::new(compact_shortcut_footer(
-                    self.detail_focus,
-                    self.show_prompts,
-                ))
-                .block(block),
-                area,
-            );
-            return;
-        }
-
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Ratio(1, 3),
-                Constraint::Ratio(1, 3),
-                Constraint::Ratio(1, 3),
-            ])
-            .split(inner);
-        for (index, lines) in shortcut_groups(self.detail_focus, self.show_prompts)
-            .into_iter()
-            .enumerate()
-        {
-            let paragraph = Paragraph::new(lines).block(if index == 0 {
-                Block::default()
-            } else {
-                Block::default()
-                    .borders(Borders::LEFT)
-                    .border_style(Style::default().fg(Color::DarkGray))
-            });
-            frame.render_widget(paragraph, columns[index]);
-        }
-    }
-
-    fn render_grid(&self, frame: &mut Frame, area: Rect) {
-        let columns = if area.width >= 110 { 2 } else { 1 };
-        let rows = self.snapshot.providers.len().div_ceil(columns).max(1);
-        let row_constraints = vec![Constraint::Ratio(1, rows as u32); rows];
-        let row_areas = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(row_constraints)
-            .split(area);
-        for (row, row_area) in row_areas.iter().enumerate() {
-            let col_areas = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints(vec![Constraint::Ratio(1, columns as u32); columns])
-                .split(*row_area);
-            for col in 0..columns {
-                let index = row * columns + col;
-                if let Some(provider) = self.snapshot.providers.get(index) {
-                    self.render_card(frame, col_areas[col], index, provider);
-                }
+    fn move_selection(&mut self, delta: isize) {
+        let provider = self.snapshot.providers.get(self.selected);
+        match self.view {
+            View::Providers => self.move_provider(delta),
+            View::Requests => {
+                let last = provider.map_or(0, |p| p.events.len().saturating_sub(1));
+                self.selected_event = self.selected_event.saturating_add_signed(delta).min(last);
+            }
+            View::Prompts => {
+                let last = provider.map_or(0, |p| p.prompt_events.len().saturating_sub(1));
+                self.selected_prompt = self.selected_prompt.saturating_add_signed(delta).min(last);
+            }
+            _ => {
+                self.detail_scroll = (self.detail_scroll as usize)
+                    .saturating_add_signed(delta)
+                    .min(u16::MAX as usize) as u16
             }
         }
     }
 
-    fn render_detail_dashboard(&self, frame: &mut Frame, area: Rect) {
+    fn move_provider(&mut self, delta: isize) {
+        let last = self.snapshot.providers.len().saturating_sub(1);
+        let next = self.selected.saturating_add_signed(delta).min(last);
+        if next != self.selected {
+            self.selected = next;
+            self.selected_event = 0;
+            self.selected_prompt = 0;
+            self.detail_scroll = 0;
+            match self.view {
+                View::Request(_) => self.view = View::Requests,
+                View::Prompt(_) => self.view = View::Prompts,
+                _ => {}
+            }
+        }
+    }
+
+    fn select_window(&mut self, window: Window) {
+        if window != self.snapshot.window {
+            self.snapshot.window = window;
+            // Display placeholders until this range's own results arrive.
+            self.snapshot.providers.clear();
+            self.selected_event = 0;
+            self.selected_prompt = 0;
+            self.detail_scroll = 0;
+            match self.view {
+                View::Request(_) => self.view = View::Requests,
+                View::Prompt(_) => self.view = View::Prompts,
+                _ => {}
+            }
+            self.refresh(self.tx.clone(), false);
+        }
+    }
+
+    fn render_report(&mut self, frame: &mut Frame, area: Rect) {
         let Some(provider) = self.snapshot.providers.get(self.selected) else {
             frame.render_widget(Paragraph::new("No provider selected"), area);
             return;
         };
         let color = provider_color(self.selected);
-        if self.show_prompts {
-            self.render_prompt_dashboard(frame, area, provider, color);
-            return;
-        }
         let mut lines = vec![Line::from(aligned_header(
             &format!("● {}", provider_label(&provider.name)),
             &format!(
@@ -1108,277 +958,6 @@ impl Dashboard {
             lines.push(table_border(&widths, '└', '┴', '┘'));
         }
         lines.push(Line::from(""));
-        if self.show_prompts {
-            lines.push(section_line(
-                "Recent Prompts",
-                Color::Rgb(142, 209, 197),
-                inner_width,
-            ));
-            if provider.prompt_events.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "  No retrievable user prompts for this time range",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            } else if inner_width >= 90 {
-                let widths = [3, 19, 20, 42];
-                lines.push(table_border(&widths, '┌', '┬', '┐'));
-                lines.push(table_header_row(
-                    &["#", "timestamp", "model", "prompt"].map(str::to_owned),
-                    &widths,
-                    &[true, false, false, false],
-                ));
-                lines.push(table_border(&widths, '├', '┼', '┤'));
-                for (index, prompt) in provider.prompt_events.iter().enumerate() {
-                    let row = table_row(
-                        &[
-                            (index + 1).to_string(),
-                            prompt
-                                .usage
-                                .occurred_at
-                                .with_timezone(&Local)
-                                .format("%Y-%m-%d %H:%M:%S")
-                                .to_string(),
-                            truncate(prompt.usage.model.as_deref().unwrap_or("unknown"), 20),
-                            truncate(&single_line(&prompt.text), 42),
-                        ],
-                        &widths,
-                        &[true, false, false, false],
-                    );
-                    lines.push(if index == self.selected_prompt {
-                        row.style(
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        row
-                    });
-                }
-                lines.push(table_border(&widths, '└', '┴', '┘'));
-            } else {
-                for (index, prompt) in provider.prompt_events.iter().enumerate() {
-                    let line = Line::from(format!(
-                        "{} {} · {} · {}",
-                        if index == self.selected_prompt {
-                            ">"
-                        } else {
-                            " "
-                        },
-                        prompt
-                            .usage
-                            .occurred_at
-                            .with_timezone(&Local)
-                            .format("%m-%d %H:%M"),
-                        truncate(prompt.usage.model.as_deref().unwrap_or("unknown"), 18),
-                        truncate(
-                            &single_line(&prompt.text),
-                            inner_width.saturating_sub(36) as usize
-                        ),
-                    ));
-                    lines.push(if index == self.selected_prompt {
-                        line.style(Style::default().fg(Color::Yellow))
-                    } else {
-                        line
-                    });
-                }
-            }
-            if self.show_prompt_detail
-                && let Some(prompt) = provider.prompt_events.get(self.selected_prompt)
-            {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "Selected prompt",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )));
-                for value in [
-                    format!("prompt id      {}", prompt.usage.event_id),
-                    format!(
-                        "timestamp      {} local / {} UTC",
-                        prompt
-                            .usage
-                            .occurred_at
-                            .with_timezone(&Local)
-                            .format("%Y-%m-%d %H:%M:%S %Z"),
-                        prompt.usage.occurred_at.format("%Y-%m-%d %H:%M:%S")
-                    ),
-                    format!(
-                        "session        {}",
-                        prompt.usage.session_id.as_deref().unwrap_or("unavailable")
-                    ),
-                    format!(
-                        "model/project  {} / {}",
-                        prompt.usage.model.as_deref().unwrap_or("unknown"),
-                        prompt.usage.project.as_deref().unwrap_or("unavailable")
-                    ),
-                    format!(
-                        "source         {} / {}",
-                        prompt.source_system, prompt.source_channel
-                    ),
-                    format!(
-                        "source locator {}",
-                        prompt.source_locator.as_deref().unwrap_or("unavailable")
-                    ),
-                ] {
-                    lines.push(Line::from(value));
-                }
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "Prompt text",
-                    Style::default().fg(Color::Rgb(142, 209, 197)),
-                )));
-                lines.extend(
-                    prompt
-                        .text
-                        .lines()
-                        .map(|line| Line::from(format!("  {line}"))),
-                );
-            }
-        } else {
-            lines.push(section_line(
-                "Recent Requests",
-                Color::Rgb(130, 180, 255),
-                inner_width,
-            ));
-            if provider.events.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "  No request events for this time range",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            } else if inner_width >= 90 {
-                let widths = [3, 19, 28, 12, 14];
-                lines.push(table_border(&widths, '┌', '┬', '┐'));
-                lines.push(table_header_row(
-                    &["#", "timestamp", "model", "status", "tokens"].map(str::to_owned),
-                    &widths,
-                    &[true, false, false, false, true],
-                ));
-                lines.push(table_border(&widths, '├', '┼', '┤'));
-                for (index, event) in provider.events.iter().enumerate() {
-                    let row = table_row(
-                        &[
-                            (index + 1).to_string(),
-                            event
-                                .usage
-                                .occurred_at
-                                .with_timezone(&Local)
-                                .format("%Y-%m-%d %H:%M:%S")
-                                .to_string(),
-                            truncate(event.usage.model.as_deref().unwrap_or("unknown"), 28),
-                            truncate(&event.status, 12),
-                            compact(event.usage.total_tokens),
-                        ],
-                        &widths,
-                        &[true, false, false, false, true],
-                    );
-                    lines.push(if index == self.selected_event {
-                        row.style(
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        row
-                    });
-                }
-                lines.push(table_border(&widths, '└', '┴', '┘'));
-            } else {
-                for (index, event) in provider.events.iter().enumerate() {
-                    let line = Line::from(format!(
-                        "{} {} · {} · {} · {} tok",
-                        if index == self.selected_event {
-                            ">"
-                        } else {
-                            " "
-                        },
-                        event
-                            .usage
-                            .occurred_at
-                            .with_timezone(&Local)
-                            .format("%m-%d %H:%M"),
-                        truncate(event.usage.model.as_deref().unwrap_or("unknown"), 22),
-                        truncate(&event.status, 10),
-                        compact(event.usage.total_tokens),
-                    ));
-                    lines.push(if index == self.selected_event {
-                        line.style(Style::default().fg(Color::Yellow))
-                    } else {
-                        line
-                    });
-                }
-            }
-            if self.show_event_detail
-                && let Some(event) = provider.events.get(self.selected_event)
-            {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "Selected request",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )));
-                for value in [
-                    format!("event id       {}", event.usage.event_id),
-                    format!(
-                        "timestamp      {} local / {} UTC",
-                        event
-                            .usage
-                            .occurred_at
-                            .with_timezone(&Local)
-                            .format("%Y-%m-%d %H:%M:%S %Z"),
-                        event.usage.occurred_at.format("%Y-%m-%d %H:%M:%S")
-                    ),
-                    format!(
-                        "request id     {}",
-                        event.source_request_id.as_deref().unwrap_or("unavailable")
-                    ),
-                    format!(
-                        "session        {}",
-                        event.usage.session_id.as_deref().unwrap_or("unavailable")
-                    ),
-                    format!(
-                        "model / status {} / {}",
-                        event.usage.model.as_deref().unwrap_or("unknown"),
-                        event.status
-                    ),
-                    format!(
-                        "client/project {} / {}",
-                        event.usage.client.as_deref().unwrap_or("unavailable"),
-                        event.usage.project.as_deref().unwrap_or("unavailable")
-                    ),
-                    format!(
-                        "source         {} / {}",
-                        event.source_system, event.source_channel
-                    ),
-                    format!(
-                        "source locator {}",
-                        event.source_locator.as_deref().unwrap_or("unavailable")
-                    ),
-                    format!("total source   {}", event.total_source),
-                    format!(
-                        "duration        {}",
-                        event
-                            .duration_ms
-                            .map(|value| format!("{value} ms"))
-                            .unwrap_or_else(|| "unavailable".into())
-                    ),
-                    format!(
-                        "tokens          in={} out={} reason={} cache-read={} cache-write={} total={}",
-                        event.usage.input_tokens,
-                        event.usage.output_tokens,
-                        event.usage.reasoning_tokens,
-                        event.usage.cache_read_tokens,
-                        event.usage.cache_write_tokens,
-                        event.usage.total_tokens,
-                    ),
-                    format!("cost            ${:.6}", event.usage.cost_usd),
-                ] {
-                    lines.push(Line::from(value));
-                }
-            }
-        }
-        lines.push(Line::from(""));
         lines.push(section_line("Other Data", Color::DarkGray, inner_width));
         if compact_layout {
             lines.extend([
@@ -1488,309 +1067,13 @@ impl Dashboard {
                 trend_area,
             );
         }
-        frame.render_widget(
-            Paragraph::new(lines)
-                .scroll((self.detail_scroll, 0))
-                .wrap(Wrap { trim: false })
-                .block(
-                    Block::default()
-                        .title(format!(" {} Detail ", provider_label(&provider.name)))
-                        .borders(Borders::ALL)
-                        .border_style(color),
-                ),
-            body_area,
-        );
-    }
-
-    fn render_prompt_dashboard(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        provider: &ProviderData,
-        color: Color,
-    ) {
-        let inner_width = area.width.saturating_sub(2);
-        let mut lines = vec![Line::from(aligned_header(
-            &format!("● {}", provider_label(&provider.name)),
-            &format!(
-                "✦ Prompts · {} · {}",
-                provider.name,
-                self.snapshot.window.label()
-            ),
-            inner_width,
-        ))];
-        lines.push(Line::from(format!(
-            "{} retrievable prompts · use ↑↓/jk, Home/End, Enter to expand",
-            provider.prompt_events.len()
-        )));
-        lines.push(Line::from("─".repeat(inner_width as usize)));
-        lines.push(section_line(
-            "Recent Prompts",
-            Color::Rgb(142, 209, 197),
-            inner_width,
-        ));
-        if provider.prompt_events.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "No retrievable user prompts for this time range",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(
-                "Run `au sync <provider>` if history should be available.",
-            ));
-        } else if inner_width >= 90 {
-            let prompt_width = flexible_table_column_width(inner_width as usize, &[3, 19, 20], 4);
-            let widths = [3, 19, 20, prompt_width];
-            lines.push(table_border(&widths, '┌', '┬', '┐'));
-            lines.push(table_header_row(
-                &["#", "timestamp", "model", "prompt"].map(str::to_owned),
-                &widths,
-                &[true, false, false, false],
-            ));
-            lines.push(table_border(&widths, '├', '┼', '┤'));
-            for (index, prompt) in provider.prompt_events.iter().enumerate() {
-                let row = table_row(
-                    &[
-                        (index + 1).to_string(),
-                        prompt
-                            .usage
-                            .occurred_at
-                            .with_timezone(&Local)
-                            .format("%Y-%m-%d %H:%M:%S")
-                            .to_string(),
-                        truncate(prompt.usage.model.as_deref().unwrap_or("unknown"), 20),
-                        truncate(&single_line(&prompt.text), prompt_width),
-                    ],
-                    &widths,
-                    &[true, false, false, false],
-                );
-                lines.push(if index == self.selected_prompt {
-                    row.style(
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                } else {
-                    row
-                });
-            }
-            lines.push(table_border(&widths, '└', '┴', '┘'));
-        } else {
-            for (index, prompt) in provider.prompt_events.iter().enumerate() {
-                let line = Line::from(format!(
-                    "{} {} · {} · {}",
-                    if index == self.selected_prompt {
-                        ">"
-                    } else {
-                        " "
-                    },
-                    prompt
-                        .usage
-                        .occurred_at
-                        .with_timezone(&Local)
-                        .format("%m-%d %H:%M"),
-                    truncate(prompt.usage.model.as_deref().unwrap_or("unknown"), 18),
-                    truncate(
-                        &single_line(&prompt.text),
-                        inner_width.saturating_sub(36) as usize,
-                    ),
-                ));
-                lines.push(if index == self.selected_prompt {
-                    line.style(Style::default().fg(Color::Yellow))
-                } else {
-                    line
-                });
-            }
-        }
-        if self.show_prompt_detail
-            && let Some(prompt) = provider.prompt_events.get(self.selected_prompt)
-        {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Selected prompt",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(format!(
-                "timestamp {} local / {} UTC",
-                prompt
-                    .usage
-                    .occurred_at
-                    .with_timezone(&Local)
-                    .format("%Y-%m-%d %H:%M:%S %Z"),
-                prompt.usage.occurred_at.format("%Y-%m-%d %H:%M:%S")
-            )));
-            lines.push(Line::from(format!(
-                "session {} · model {} · project {}",
-                prompt.usage.session_id.as_deref().unwrap_or("unavailable"),
-                prompt.usage.model.as_deref().unwrap_or("unknown"),
-                prompt.usage.project.as_deref().unwrap_or("unavailable")
-            )));
-            lines.push(Line::from(format!(
-                "source {} / {} · locator {}",
-                prompt.source_system,
-                prompt.source_channel,
-                prompt.source_locator.as_deref().unwrap_or("unavailable")
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Prompt text",
-                Style::default().fg(Color::Rgb(142, 209, 197)),
-            )));
-            lines.extend(
-                prompt
-                    .text
-                    .lines()
-                    .map(|line| Line::from(format!("  {line}"))),
-            );
-        }
-        frame.render_widget(
-            Paragraph::new(lines)
-                .scroll((self.detail_scroll, 0))
-                .wrap(Wrap { trim: false })
-                .block(
-                    Block::default()
-                        .title(format!(
-                            " {} Prompt History ",
-                            provider_label(&provider.name)
-                        ))
-                        .borders(Borders::ALL)
-                        .border_style(color),
-                ),
-            area,
-        );
-    }
-
-    fn render_card(&self, frame: &mut Frame, area: Rect, index: usize, provider: &ProviderData) {
-        let color = provider_color(index);
-        let selected = index == self.selected;
-        let border = if selected {
-            Style::default().fg(Color::White)
-        } else {
-            Style::default().fg(color)
-        };
-        let card_style = if selected {
-            Style::default().bg(Color::Rgb(38, 42, 62))
-        } else {
-            Style::default()
-        };
-        let status = if provider.loading {
-            "LOADING"
-        } else if provider.updating
-            && provider.total_tokens == 0
-            && provider.requests == 0
-            && provider.sessions == 0
-        {
-            "UPDATING"
-        } else if provider.error.is_some() {
-            "UNAVAILABLE"
-        } else {
-            "OK"
-        };
-        let name = provider_label(&provider.name);
-        let header_left = format!("{}{}", if selected { "▶ " } else { "● " }, name);
-        let header_right = format!("◷ {} {}", self.snapshot.window.label(), status);
-        let header = aligned_header(&header_left, &header_right, area.width.saturating_sub(2));
-        let mut lines = vec![Line::from(vec![Span::styled(
-            header,
-            Style::default()
-                .fg(if status == "OK" { color } else { Color::Yellow })
-                .add_modifier(Modifier::BOLD),
-        )])];
-        lines.push(Line::from(Span::styled(
-            format!("⚡ Usage · {}", provider.name),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            "────────────────────────────────────────",
-            Style::default().fg(color),
-        )));
-        if provider.loading {
-            lines.push(Line::from("Loading provider data…"));
-        } else if let Some(error) = &provider.error {
-            lines.push(Line::from(Span::styled(
-                error.as_str(),
-                Style::default().fg(Color::Yellow),
-            )));
-        } else {
-            let cached = cache_rate(provider);
-            let value_width = area.width.saturating_sub(28).max(18) as usize;
-            let summary_widths = [18, value_width];
-            lines.push(table_border(&summary_widths, '┌', '┬', '┐'));
-            lines.push(table_header_row(
-                &["metric", "value"].map(str::to_owned),
-                &summary_widths,
-                &[false, false],
-            ));
-            lines.push(table_border(&summary_widths, '├', '┼', '┤'));
-            for cells in [
-                vec!["prompts".to_owned(), provider.prompts.to_string()],
-                vec!["token records".to_owned(), provider.requests.to_string()],
-                vec![
-                    "model burn".to_owned(),
-                    format!("{} tok", compact(provider.total_tokens)),
-                ],
-                vec!["sessions".to_owned(), provider.sessions.to_string()],
-                vec!["cost".to_owned(), format!("${:.5}", provider.cost_usd)],
-                vec![
-                    "credits / clients".to_owned(),
-                    format!("{:.3} / {}", provider.ai_credits, provider.clients.len()),
-                ],
-            ] {
-                lines.push(table_row(&cells, &summary_widths, &[false, false]));
-            }
-            lines.push(table_border(&summary_widths, '└', '┴', '┘'));
-            lines.push(rate_limit_bar(
-                provider.primary_used_percent,
-                area.width.saturating_sub(26) as usize,
-            ));
-            lines.push(Line::from(format!(
-                "Changes +{} / -{} · {}% cached",
-                provider.lines_added,
-                provider.lines_removed,
-                cached
-                    .map(|v| format!("{v:.0}"))
-                    .unwrap_or_else(|| "n/a".into())
-            )));
-            let model_widths = [3, value_width.saturating_sub(12).max(12), 10];
-            lines.push(table_header_row(
-                &["#", "top models", "tokens"].map(str::to_owned),
-                &model_widths,
-                &[true, false, true],
-            ));
-            for model in provider.models.iter().take(3) {
-                let rank = provider
-                    .models
-                    .iter()
-                    .position(|value| value.name == model.name)
-                    .map(|rank| rank + 1)
-                    .unwrap_or_default();
-                lines.push(table_row(
-                    &[
-                        rank.to_string(),
-                        truncate(&model.name, model_widths[1]),
-                        compact(model.total_tokens),
-                    ],
-                    &model_widths,
-                    &[true, false, true],
-                ));
-            }
-            if provider.models.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "  No model data for this time range",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-        }
-        frame.render_widget(
-            Paragraph::new(lines)
-                .style(card_style)
-                .wrap(Wrap { trim: true })
-                .block(Block::default().borders(Borders::ALL).border_style(border)),
-            area,
-        );
+        let block = Block::bordered()
+            .title(format!(
+                " {} · usage report ",
+                provider_label(&provider.name)
+            ))
+            .border_style(color);
+        overview::scrollable(frame, body_area, block, lines, &mut self.detail_scroll);
     }
 }
 
@@ -1800,257 +1083,135 @@ fn load_provider(
     end: NaiveDate,
     backend: crate::storage::BackendMode,
     ingest: bool,
-) -> ProviderData {
-    if !ingest {
-        return load_cached_provider(name, start, end, backend);
-    }
-    match crate::report_for_period(name, start, end, backend) {
-        Ok(report) => {
-            let spending_by_window = load_spending_windows(name, backend);
-            let (trend, events, prompt_events) = load_activity(name, start, end, backend);
-            let rate_limit = if ingest {
-                let cached = load_cached_provider(name, start, end, backend);
-                (cached.primary_used_percent, cached.primary_window_minutes)
-            } else {
-                (None, None)
-            };
-            let mut models: Vec<_> = report
-                .models
-                .into_iter()
-                .map(|(name, usage)| ModelUsage {
-                    name,
-                    input_tokens: usage.input,
-                    output_tokens: usage.output,
-                    cache_read_tokens: usage.cache_read,
-                    cache_write_tokens: usage.cache_write,
-                    total_tokens: usage.total,
-                    cost_usd: usage.cost_usd,
-                })
-                .collect();
-            let mut clients: Vec<_> = report
-                .clients
-                .into_iter()
-                .map(|(n, u)| (n, u.total, u.cost_usd))
-                .collect();
-            let mut projects: Vec<_> = report
-                .projects
-                .into_iter()
-                .map(|(n, u)| (project_label(&n), u.total, u.cost_usd))
-                .collect();
-            models.sort_by(|a, b| {
-                b.total_tokens
-                    .cmp(&a.total_tokens)
-                    .then_with(|| a.name.cmp(&b.name))
-            });
-            clients.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            projects.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            let mut tools: Vec<_> = report.tools.into_iter().collect();
-            let mut languages: Vec<_> = report.languages.into_iter().collect();
-            tools.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            languages.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            ProviderData {
-                name: name.to_owned(),
-                loading: false,
-                sessions: report.sessions as i64,
-                requests: report.requests as i64,
-                prompts: report.prompts as i64,
-                total_tokens: report.total_tokens,
-                input_tokens: report.input_tokens,
-                output_tokens: report.output_tokens,
-                reasoning_tokens: report.reasoning_tokens,
-                cache_read_tokens: report.cached_input_tokens,
-                cache_write_tokens: report.cache_write_tokens,
-                cost_usd: report.cost_usd,
-                spending_by_window,
-                ai_credits: report.ai_credits,
-                lines_added: report.lines_added,
-                lines_removed: report.lines_removed,
-                files_scanned: report.files_scanned,
-                files_with_usage: report.files_with_usage,
-                token_records: report.token_records,
-                malformed_lines: report.malformed_lines,
-                models,
-                clients,
-                projects,
-                tools,
-                languages,
-                primary_used_percent: rate_limit.0,
-                primary_window_minutes: rate_limit.1,
-                desktop_signal: None,
-                trend,
-                events,
-                prompt_events,
-                ..Default::default()
-            }
-        }
-        Err(error) => ProviderData {
-            name: name.to_owned(),
-            loading: false,
-            error: Some(error.to_string()),
-            ..Default::default()
-        },
-    }
-}
-
-fn load_cached_provider(
-    name: &str,
-    start: NaiveDate,
-    end: NaiveDate,
-    backend: crate::storage::BackendMode,
-) -> ProviderData {
-    let from = crate::local_midnight_utc(start);
-    let to = crate::local_midnight_utc(end + ChronoDuration::days(1));
-    let result = crate::storage::Backend::open_read_only_for_agent(backend, name)
-        .and_then(|mut store| store.agent_summary(crate::agent_name_for_report(name), from, to));
-    match result {
-        Ok(summary) => {
-            let spending_by_window = load_spending_windows(name, backend);
-            let (trend, events, prompt_events) = load_activity(name, start, end, backend);
-            let mut models: Vec<_> = summary
-                .models
-                .into_iter()
-                .map(|(name, usage)| ModelUsage {
-                    name,
-                    input_tokens: usage.input_tokens,
-                    output_tokens: usage.output_tokens,
-                    cache_read_tokens: usage.cache_read_tokens,
-                    cache_write_tokens: usage.cache_write_tokens,
-                    total_tokens: usage.total_tokens,
-                    cost_usd: usage.cost_usd,
-                })
-                .collect();
-            let mut clients: Vec<_> = summary
-                .clients
-                .into_iter()
-                .map(|(n, u)| (n, u.total_tokens, u.cost_usd))
-                .collect();
-            let mut projects: Vec<_> = summary
-                .projects
-                .into_iter()
-                .map(|(n, u)| (project_label(&n), u.total_tokens, u.cost_usd))
-                .collect();
-            let mut tools: Vec<_> = summary
-                .tools
-                .into_iter()
-                .map(|(name, count)| (name, count as usize))
-                .collect();
-            let mut languages: Vec<_> = summary
-                .languages
-                .into_iter()
-                .map(|(name, count)| (name, count as usize))
-                .collect();
-            models.sort_by(|a, b| {
-                b.total_tokens
-                    .cmp(&a.total_tokens)
-                    .then_with(|| a.name.cmp(&b.name))
-            });
-            clients.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            projects.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            tools.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            languages.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            ProviderData {
-                name: name.to_owned(),
-                loading: false,
-                sessions: summary.sessions,
-                requests: summary.requests,
-                prompts: summary.prompts,
-                total_tokens: summary.total_tokens,
-                input_tokens: summary.input_tokens,
-                output_tokens: summary.output_tokens,
-                reasoning_tokens: summary.reasoning_tokens,
-                cache_read_tokens: summary.cache_read_tokens,
-                cache_write_tokens: summary.cache_write_tokens,
-                cost_usd: summary.cost_usd,
-                spending_by_window,
-                ai_credits: summary.ai_credits,
-                lines_added: summary.lines_added,
-                lines_removed: summary.lines_removed,
-                models,
-                clients,
-                projects,
-                tools,
-                languages,
-                primary_used_percent: summary.primary_used_percent,
-                primary_window_minutes: summary.primary_window_minutes,
-                desktop_signal: None,
-                trend,
-                events,
-                prompt_events,
-                ..Default::default()
-            }
-        }
-        Err(error) => ProviderData {
-            name: name.to_owned(),
-            loading: false,
-            error: Some(error.to_string()),
-            ..Default::default()
-        },
-    }
-}
-
-fn load_spending_windows(name: &str, backend: crate::storage::BackendMode) -> [f64; 4] {
-    let Ok(mut store) = crate::storage::Backend::open_read_only_for_agent(backend, name) else {
-        return [0.0; 4];
+) -> Result<ProviderData> {
+    let (files_scanned, files_with_usage, token_records, malformed_lines) = if ingest {
+        let mut store = crate::storage::Backend::open_for_agent(backend, name)?;
+        crate::ingest_provider(name, None, &mut store)?
+    } else {
+        (0, 0, 0, 0)
     };
     let agent = crate::agent_name_for_report(name);
-    Window::all().map(|window| {
-        let (start, end) = window.dates();
-        let from = crate::local_midnight_utc(start);
-        let to = crate::local_midnight_utc(end + ChronoDuration::days(1));
-        store
-            .agent_summary(agent, from, to)
-            .map(|summary| summary.cost_usd)
-            .unwrap_or_default()
+    let from = crate::local_midnight_utc(start);
+    let to = crate::local_midnight_utc(end + ChronoDuration::days(1));
+    let mut store = crate::storage::Backend::open_read_only_for_agent(backend, name)?;
+    let summary = store.agent_summary(agent, from, to)?;
+    let mut spending_by_window = [0.0; 4];
+    for window in Window::all() {
+        let (first, last) = window.dates();
+        spending_by_window[window.index()] = if (first, last) == (start, end) {
+            summary.cost_usd
+        } else {
+            store
+                .agent_summary(
+                    agent,
+                    crate::local_midnight_utc(first),
+                    crate::local_midnight_utc(last + ChronoDuration::days(1)),
+                )?
+                .cost_usd
+        };
+    }
+    let trend = store.trend_for_agent(agent, from, to, crate::storage::TrendInterval::Day)?;
+    let events = store.usage_events(
+        agent,
+        &crate::storage::UsageEventQuery {
+            requests_only: true,
+            from,
+            to,
+            before: None,
+            limit: 25,
+            model: None,
+            session_id: None,
+            status: None,
+        },
+    )?;
+    let prompt_events = store.prompts(
+        agent,
+        &crate::storage::PromptQuery {
+            from,
+            to,
+            before: None,
+            limit: 25,
+            session_id: None,
+            search: None,
+        },
+    )?;
+    let mut models: Vec<_> = summary
+        .models
+        .into_iter()
+        .map(|(name, usage)| ModelUsage {
+            name,
+            requests: usage.requests,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
+            total_tokens: usage.total_tokens,
+            cost_usd: usage.cost_usd,
+        })
+        .collect();
+    let mut clients: Vec<_> = summary
+        .clients
+        .into_iter()
+        .map(|(n, u)| (n, u.total_tokens, u.cost_usd))
+        .collect();
+    let mut projects: Vec<_> = summary
+        .projects
+        .into_iter()
+        .map(|(n, u)| (project_label(&n), u.total_tokens, u.cost_usd))
+        .collect();
+    let mut tools: Vec<_> = summary
+        .tools
+        .into_iter()
+        .map(|(name, count)| (name, count as usize))
+        .collect();
+    let mut languages: Vec<_> = summary
+        .languages
+        .into_iter()
+        .map(|(name, count)| (name, count as usize))
+        .collect();
+    models.sort_by(|a, b| {
+        b.total_tokens
+            .cmp(&a.total_tokens)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    clients.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    projects.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    tools.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    languages.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(ProviderData {
+        name: name.to_owned(),
+        loading: false,
+        sessions: summary.sessions,
+        requests: summary.requests,
+        prompts: summary.prompts,
+        total_tokens: summary.total_tokens,
+        input_tokens: summary.input_tokens,
+        output_tokens: summary.output_tokens,
+        reasoning_tokens: summary.reasoning_tokens,
+        cache_read_tokens: summary.cache_read_tokens,
+        cache_write_tokens: summary.cache_write_tokens,
+        cost_usd: summary.cost_usd,
+        spending_by_window,
+        ai_credits: summary.ai_credits,
+        lines_added: summary.lines_added,
+        lines_removed: summary.lines_removed,
+        models,
+        clients,
+        projects,
+        tools,
+        languages,
+        primary_used_percent: summary.primary_used_percent,
+        primary_window_minutes: summary.primary_window_minutes,
+        desktop_signal: None,
+        trend,
+        events,
+        prompt_events,
+        files_scanned,
+        files_with_usage,
+        token_records,
+        malformed_lines,
+        error: None,
     })
-}
-
-fn load_activity(
-    name: &str,
-    start: NaiveDate,
-    end: NaiveDate,
-    backend: crate::storage::BackendMode,
-) -> (
-    Vec<crate::storage::DailyUsagePoint>,
-    Vec<crate::storage::UsageEventDetail>,
-    Vec<crate::storage::PromptDetail>,
-) {
-    let Ok(mut store) = crate::storage::Backend::open_read_only_for_agent(backend, name) else {
-        return (Vec::new(), Vec::new(), Vec::new());
-    };
-    let from = crate::local_midnight_utc(start);
-    let to = crate::local_midnight_utc(end + ChronoDuration::days(1));
-    let agent = crate::agent_name_for_report(name);
-    let trend = store
-        .daily_trend_for_agent(agent, from, to)
-        .unwrap_or_default();
-    let events = store
-        .usage_events(
-            agent,
-            &crate::storage::UsageEventQuery {
-                from,
-                to,
-                before: None,
-                limit: 25,
-                model: None,
-                session_id: None,
-                status: None,
-            },
-        )
-        .unwrap_or_default();
-    let prompts = store
-        .prompts(
-            agent,
-            &crate::storage::PromptQuery {
-                from,
-                to,
-                before: None,
-                limit: 25,
-                session_id: None,
-                search: None,
-            },
-        )
-        .unwrap_or_default();
-    (trend, events, prompts)
 }
 
 fn compact(value: i64) -> String {
@@ -2095,166 +1256,21 @@ fn provider_color(index: usize) -> Color {
 }
 
 fn window_selector(selected: Window) -> Line<'static> {
-    let mut spans = vec![Span::styled(
-        " Date range ",
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )];
+    let mut spans = vec![Span::raw(" Range  ")];
     for (index, window) in Window::all().into_iter().enumerate() {
-        spans.push(Span::raw(" "));
-        let style = if window == selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+        if selected == window {
+            spans.push(Span::styled(
+                format!("[{} {}]", index + 1, window.label()),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
         } else {
-            Style::default().fg(Color::White).bg(Color::DarkGray)
-        };
-        spans.push(Span::styled(
-            format!(" {} {} ", index + 1, window.label()),
-            style,
-        ));
-    }
-    spans.push(Span::styled("  w cycles", Style::default().fg(Color::Cyan)));
-    Line::from(spans)
-}
-
-fn key_hint(key: &'static str) -> Span<'static> {
-    Span::styled(
-        key,
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )
-}
-
-fn hint_label(label: &'static str) -> Span<'static> {
-    Span::styled(format!(" {label}"), Style::default().fg(Color::Gray))
-}
-
-fn hint_separator() -> Span<'static> {
-    Span::styled("  ·  ", Style::default().fg(Color::DarkGray))
-}
-
-fn shortcut_group(
-    title: &'static str,
-    actions: &[(&'static str, &'static str)],
-) -> Vec<Line<'static>> {
-    let mut action_spans = vec![Span::raw(" ")];
-    for (index, (key, label)) in actions.iter().enumerate() {
-        if index > 0 {
-            action_spans.push(hint_separator());
+            spans.push(Span::raw(format!(" {} {} ", index + 1, window.label())));
         }
-        action_spans.push(key_hint(key));
-        action_spans.push(hint_label(label));
+        spans.push(Span::raw("  "));
     }
-    vec![
-        Line::from(Span::styled(
-            format!(" {title}"),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(action_spans),
-    ]
-}
-
-fn shortcut_groups(detail_focus: bool, show_prompts: bool) -> [Vec<Line<'static>>; 3] {
-    if !detail_focus {
-        return [
-            shortcut_group("NAVIGATE", &[("↑↓/jk", "select"), ("←→/hl", "provider")]),
-            shortcut_group("OPEN", &[("Enter", "requests"), ("p", "prompts")]),
-            shortcut_group(
-                "DATE & APP",
-                &[("1-4/w", "range"), ("r", "refresh"), ("q", "quit")],
-            ),
-        ];
-    }
-
-    let (row, action, switch) = if show_prompts {
-        ("prompt", "expand", "requests")
-    } else {
-        ("request", "inspect", "prompts")
-    };
-    [
-        shortcut_group("NAVIGATE", &[("↑↓/jk", row), ("^U/^D", "scroll")]),
-        shortcut_group("VIEW", &[("Enter", action), ("p", switch)]),
-        shortcut_group("APP", &[("m", "mouse"), ("Esc", "back"), ("q", "quit")]),
-    ]
-}
-
-fn compact_shortcut_footer(detail_focus: bool, show_prompts: bool) -> Vec<Line<'static>> {
-    let category = |title| {
-        Span::styled(
-            format!(" {title}  "),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
-    if !detail_focus {
-        return vec![
-            Line::from(vec![
-                category("NAV"),
-                key_hint("↑↓/jk"),
-                hint_label("select"),
-                hint_separator(),
-                key_hint("←→/hl"),
-                hint_label("provider"),
-                hint_separator(),
-                key_hint("Enter"),
-                hint_label("requests"),
-            ]),
-            Line::from(vec![
-                category("MORE"),
-                key_hint("p"),
-                hint_label("prompts"),
-                hint_separator(),
-                key_hint("1-4/w"),
-                hint_label("range"),
-                hint_separator(),
-                key_hint("r"),
-                hint_label("refresh"),
-                hint_separator(),
-                key_hint("q"),
-                hint_label("quit"),
-            ]),
-        ];
-    }
-
-    let (row, action, switch) = if show_prompts {
-        ("prompt", "expand", "requests")
-    } else {
-        ("request", "inspect", "prompts")
-    };
-    vec![
-        Line::from(vec![
-            category("VIEW"),
-            key_hint("↑↓/jk"),
-            hint_label(row),
-            hint_separator(),
-            key_hint("Enter"),
-            hint_label(action),
-            hint_separator(),
-            key_hint("p"),
-            hint_label(switch),
-            hint_separator(),
-            key_hint("Esc"),
-            hint_label("back"),
-        ]),
-        Line::from(vec![
-            category("MORE"),
-            key_hint("^U/^D"),
-            hint_label("scroll"),
-            hint_separator(),
-            key_hint("m"),
-            hint_label("mouse"),
-            hint_separator(),
-            key_hint("q"),
-            hint_label("quit"),
-        ]),
-    ]
+    Line::from(spans)
 }
 
 fn section_line(title: &str, color: Color, width: u16) -> Line<'static> {
@@ -2278,17 +1294,6 @@ fn table_border(widths: &[usize], left: char, separator: char, right: char) -> L
         });
     }
     Line::from(Span::styled(value, Style::default().fg(Color::DarkGray)))
-}
-
-fn flexible_table_column_width(
-    total_width: usize,
-    fixed_widths: &[usize],
-    column_count: usize,
-) -> usize {
-    let borders_and_padding = column_count * 3 + 1;
-    total_width
-        .saturating_sub(fixed_widths.iter().sum::<usize>() + borders_and_padding)
-        .max(1)
 }
 
 fn table_row(cells: &[String], widths: &[usize], right_aligned: &[bool]) -> Line<'static> {
@@ -2442,11 +1447,8 @@ mod tests {
     }
 
     #[test]
-    fn prompt_table_uses_the_available_width_and_aligns_wide_text() {
-        let prompt_width = flexible_table_column_width(118, &[3, 19, 20], 4);
-        let widths = [3, 19, 20, prompt_width];
-        assert_eq!(widths.iter().sum::<usize>() + widths.len() * 3 + 1, 118);
-
+    fn table_columns_align_wide_text() {
+        let widths = [3, 19, 20, 63];
         let row = table_row(
             &[
                 "1".to_owned(),
@@ -2485,7 +1487,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_history_is_reachable_from_grid_and_supports_flexible_navigation() {
+    fn prompt_history_opens_from_providers_and_returns_one_level_at_a_time() {
         let mut dashboard = Dashboard::new(
             Vec::new(),
             crate::config::AppConfig {
@@ -2517,27 +1519,53 @@ mod tests {
         ];
 
         dashboard.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
-        assert!(dashboard.detail_focus);
-        assert!(dashboard.show_prompts);
+        assert!(matches!(dashboard.view, View::Prompts));
         dashboard.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(dashboard.selected, 1);
         dashboard.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        assert_eq!(dashboard.selected, 0);
-        dashboard.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        assert_eq!(dashboard.selected_prompt, 0);
-        dashboard.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-        assert_eq!(dashboard.detail_scroll, 0);
-        dashboard.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE));
-        assert!(!dashboard.show_prompts);
-        dashboard.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
-        assert!(dashboard.show_prompts);
-        dashboard.show_prompt_detail = true;
-        dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(!dashboard.show_prompt_detail && dashboard.show_prompts);
-        dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(dashboard.detail_focus && !dashboard.show_prompts);
-        dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(!dashboard.detail_focus);
+        dashboard.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(dashboard.view, View::Prompt(_)));
+        for _ in 0..3 {
+            dashboard.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        }
+        assert!(matches!(dashboard.view, View::Providers));
+    }
+
+    #[test]
+    fn refresh_keeps_the_selected_record_and_scroll_position() {
+        fn event(id: &str) -> crate::storage::UsageEventDetail {
+            crate::storage::usage_event_detail(
+                crate::storage::UsageEvent {
+                    event_id: id.into(),
+                    ..Default::default()
+                },
+                "codex".into(),
+                "jsonl".into(),
+                serde_json::json!({}),
+                false,
+            )
+        }
+        let mut app = Dashboard::new(Vec::new(), crate::config::AppConfig::default(), None);
+        let provider = |ids: &[&str]| ProviderData {
+            name: "codex".into(),
+            events: ids.iter().map(|id| event(id)).collect(),
+            ..Default::default()
+        };
+        app.snapshot.providers = vec![provider(&["old"]), ProviderData::default()];
+        app.set_view(View::Requests);
+        app.replace_provider(0, provider(&["new", "old"]));
+        assert_eq!(app.selected_event, 1);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.detail_scroll = 6;
+        app.replace_provider(1, ProviderData::default());
+        app.replace_provider(0, provider(&["newer", "new", "old"]));
+        assert_eq!(app.selected_event, 2);
+        app.replace_provider(0, provider(&["newest"]));
+        assert_eq!(app.detail_scroll, 6);
+        assert!(matches!(&app.view, View::Request(open) if open.usage.event_id == "old"));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.selected_event, 0);
+        assert!(matches!(app.view, View::Requests));
     }
 
     #[test]
@@ -2550,7 +1578,7 @@ mod tests {
             },
             None,
         );
-        dashboard.detail_focus = true;
+        dashboard.view = View::Report;
 
         dashboard.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
         assert_eq!(dashboard.detail_scroll, 8);
@@ -2587,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_grid_and_detail_at_common_terminal_sizes() {
+    fn overview_and_request_inspector_fit_common_terminal_sizes() {
         for (width, height) in [(80, 24), (120, 40)] {
             let backend = TestBackend::new(width, height);
             let mut terminal = Terminal::new(backend).unwrap();
@@ -2612,7 +1640,7 @@ mod tests {
                 output_tokens: 20,
                 cache_read_tokens: 60,
                 total_tokens: 120,
-                trend: vec![crate::storage::DailyUsagePoint {
+                trend: vec![crate::storage::UsageTrendPoint {
                     date: occurred_at.date_naive(),
                     total_tokens: 120,
                     ..Default::default()
@@ -2640,34 +1668,26 @@ mod tests {
                 }],
                 ..Default::default()
             }];
-            terminal.draw(|frame| dashboard.render(frame)).unwrap();
-            dashboard.detail_focus = true;
-            terminal.draw(|frame| dashboard.render(frame)).unwrap();
-            dashboard.show_prompts = true;
-            terminal.draw(|frame| dashboard.render(frame)).unwrap();
-            let prompt_view = terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>();
-            assert!(prompt_view.contains("Prompt History"));
-            assert!(prompt_view.contains("Date range"));
-            assert!(prompt_view.contains("Controls"));
-            assert!(prompt_view.contains("Update available"));
-            if width >= 100 {
-                assert!(prompt_view.contains("NAVIGATE"));
-                assert!(prompt_view.contains("VIEW"));
-                assert!(prompt_view.contains("APP"));
-            } else {
-                assert!(prompt_view.contains("MORE"));
-            }
-            let rendered = terminal.backend().buffer().content().iter().any(|cell| {
-                let symbol = cell.symbol();
-                symbol == "a" || symbol == "D"
-            });
-            assert!(rendered);
+            let screen = |dashboard: &mut Dashboard, terminal: &mut Terminal<TestBackend>| {
+                terminal.draw(|frame| dashboard.render(frame)).unwrap();
+                terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|c| c.symbol())
+                    .collect::<String>()
+            };
+            let overview = screen(&mut dashboard, &mut terminal);
+            assert!(overview.contains("Providers") && overview.contains("120"));
+            assert_eq!(overview.contains("Recent requests"), width >= 110);
+            dashboard.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let requests = screen(&mut dashboard, &mut terminal);
+            assert!(requests.contains("Recent requests") && requests.contains("gpt-5"));
+            dashboard.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            assert!(screen(&mut dashboard, &mut terminal).contains("request-1"));
+            dashboard.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+            assert!(screen(&mut dashboard, &mut terminal).contains("Keyboard shortcuts"));
         }
     }
 }

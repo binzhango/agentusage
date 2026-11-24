@@ -1,0 +1,153 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f8fa; --paper: #fff; --ink: #1e2630; --muted: #5d6876;
+  --rule: #e1e5ea; --soft: #f3f5f7; --blue: #0878d8; --tint: #eef7ff;
+  --negative: #aa3135; --shadow: 0 1px 3px #162b4507;
+  font: 15px/1.45 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #13181e; --paper: #1b222a; --ink: #ecf0f4; --muted: #aeb9c6;
+  --rule: #36414d; --soft: #252e38; --blue: #66b4ff; --tint: #203246;
+  --negative: #ffa0a2;
+}
+* {box-sizing: border-box}
+[hidden] {display: none !important}
+body {margin: 0; background: var(--bg); color: var(--ink)}
+button, input, select {font: inherit; color: inherit}
+button, select, .action {
+  cursor: pointer; border: 1px solid var(--rule); border-radius: 7px; background: var(--paper);
+  padding: 7px 12px; font-weight: 550; font-size: .85rem;
+}
+button:hover, .action:hover, select:hover {background: var(--soft)}
+:focus-visible {outline: 2px solid var(--blue); outline-offset: 3px}
+button:disabled {opacity: .55; cursor: default}
+a {color: var(--blue); text-decoration: none}
+a:hover {text-decoration: underline}
+header {border-bottom: 1px solid var(--rule); background: var(--paper)}
+.topbar, main {max-width: 1376px; padding-inline: clamp(18px, 4vw, 64px); margin: auto}
+.topbar, .brand, .page-heading, .panel-head, .section-head, .history-head {display: flex; align-items: center}
+.topbar {height: 62px; gap: 18px}
+.brand {gap: 10px; font-size: 1rem; font-weight: 700; color: var(--ink); letter-spacing: -.03em}
+.brand:hover {text-decoration: none}
+.monogram {display: grid; place-items: center; background: var(--ink); color: var(--paper); border-radius: 7px; width: 30px; height: 30px; font-weight: 650; letter-spacing: -.06em}
+.workspace {border-left: 1px solid var(--rule); padding-left: 18px; color: var(--muted); font-size: .85rem}
+#theme-toggle {margin-left: auto}
+.quiet {background: transparent; border-color: transparent; color: var(--muted)}
+main {padding-bottom: 64px}
+.page-heading {justify-content: space-between; gap: 16px; margin: 32px 0 22px; flex-wrap: wrap}
+h1,h2,h3,p {margin: 0}
+h1 {font-size: clamp(25px, 3vw, 34px); font-weight: 600; line-height: 1.2; letter-spacing: -.05em}
+h2 {font-size: 1.34rem; font-weight: 600; letter-spacing: -.035em}
+h3 {font-size: 1rem; font-weight: 600}
+#back {display: inline-block; margin-bottom: 9px; color: var(--muted); font-size: .85rem}
+.ranges {display: flex; padding: 3px; border: 1px solid var(--rule); border-radius: 9px; background: var(--soft)}
+.ranges button {border: 1px solid transparent; background: transparent; color: var(--muted); padding: 5px 13px}
+.ranges button[aria-pressed="true"] {border-color: var(--rule); background: var(--paper); color: var(--ink); box-shadow: 0 1px 2px #0001}
+.panel {border: 1px solid var(--rule); border-radius: 14px; background: var(--paper); box-shadow: var(--shadow); margin-bottom: 24px}
+.panel-head,.section-head,.history-head {justify-content: space-between; gap: 14px; flex-wrap: wrap}
+.panel-head,.section-head {padding: 21px 26px 16px}
+.sub,.muted,.status {color: var(--muted); font-size: .86rem}
+.sub {margin-top: 3px}
+.period {display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: .84rem}
+.period::before {content: ""; width: 16px; border-top: 2px solid var(--blue)}
+.activity {--rail: clamp(175px, 20vw, 252px); --track: minmax(0,1fr); overflow: hidden}
+.plot-row,.lane {display: grid; grid-template-columns: var(--rail) var(--track); padding-inline: 26px; align-items: center}
+.readout {align-self: center; padding-right: 14px}
+.readout .caption {font-size: .87rem; color: var(--muted)}
+.big {display: block; font-size: clamp(34px,4.2vw,56px); font-weight: 550; line-height: 1.15; letter-spacing: -.07em; margin: 3px 0 6px}
+.readout small {color: var(--muted); font-size: .8rem; overflow-wrap: anywhere}
+.graph {min-width: 0; position: relative; margin-top: 14px; margin-bottom: 6px}
+.plot {height: 150px; position: relative; margin-top: 16px; touch-action: pan-y; cursor: crosshair}
+.plot svg {width: 100%; height: 100%; display: block; overflow: visible}
+.gridline {stroke: var(--rule); stroke-dasharray: 3 5; vector-effect: non-scaling-stroke}
+.curve {stroke: var(--series,var(--blue)); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; fill: none; vector-effect: non-scaling-stroke}
+.scale {position: absolute; right: calc(100% + 7px); color: var(--muted); font-size: 10px; line-height: 1; transform: translateY(-50%); pointer-events: none}
+.cursor {position: absolute; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .6; pointer-events: none}
+.point {position: absolute; width: 9px; height: 9px; border: 2px solid var(--series,var(--blue)); background: var(--paper); border-radius: 50%; transform: translate(-50%,-50%); pointer-events: none}
+.callout {position: absolute; top: -21px; transform: translateX(-50%); background: var(--soft); color: var(--ink); border: 1px solid var(--rule); border-radius: 5px; padding: 2px 7px; white-space: nowrap; font-size: .74rem; pointer-events: none}
+.ticks {position: relative; height: 29px; margin-top: 5px; color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums}
+.ticks span {position: absolute; white-space: nowrap; transform: translateX(-50%)}
+.lane {width: 100%; border: 0; border-top: 1px solid var(--rule); border-radius: 0; background: none; text-align: left; min-height: 40px; font-size: .88rem; font-weight: 500}
+.lane:hover,.lane[aria-pressed="true"] {background: var(--tint)}
+.lane:focus-visible {outline-offset: -3px}
+.lane-key {display: flex; align-items: center; gap: 9px; min-width: 0; padding-right: 14px}
+.lane-name {overflow: hidden; text-overflow: ellipsis; white-space: nowrap}
+.lane-key small {margin-left: auto; color: var(--muted); font-size: .77rem; font-variant-numeric: tabular-nums}
+.dot {display: inline-block; width: 8px; height: 8px; background: var(--series); border-radius: 2px; flex: none}
+.track {position: relative; display: grid; grid-template-columns: repeat(var(--bins),minmax(0,1fr)); height: 22px; align-items: center}
+.track::after {content: ''; position: absolute; top: -9px; bottom: -9px; left: var(--cursor-x); border-left: 1px solid var(--muted); opacity: .45; pointer-events: none}
+.bin {height: 100%; border-left: 1px solid var(--rule); display: flex; align-items: center; justify-content: center}
+.bin i {height: 12px; width: 92%; border-radius: 3px; background: var(--series)}
+.plot-note {padding: 12px 26px; border-top: 1px solid var(--rule); color: var(--muted); font-size: .8rem; min-height: 42px}
+.directory, .detail-panel {padding-bottom: 5px}
+.provider-line {display: grid; grid-template-columns: minmax(160px, 2fr) repeat(2, minmax(60px, 1fr)) minmax(80px,1fr) minmax(170px,1.3fr); align-items: center; gap: 14px; padding: 13px 26px; border-top: 1px solid var(--rule); font-variant-numeric: tabular-nums}
+.colheads {color: var(--muted); font-size: .76rem; padding-block: 8px; background: var(--soft)}
+.provider-link {display: inline-flex; gap: 9px; align-items: center; color: var(--ink); font-weight: 600}
+.row-actions {display: flex; gap: 4px; align-items: center; justify-content: flex-end}
+.history-toggle {font-size: .8rem; white-space: nowrap; padding-inline: 7px; color: var(--blue); border-color: transparent}
+.actions {position: relative}
+.actions summary {list-style: none; cursor: pointer; padding: 4px 8px; border-radius: 5px; font-weight: bold; color: var(--muted)}
+.actions summary::-webkit-details-marker {display: none}
+.actions summary:hover {background: var(--soft)}
+.menu {position: absolute; right: 0; top: 100%; z-index: 2; min-width: 148px; background: var(--paper); padding: 4px; border: 1px solid var(--rule); border-radius: 8px; box-shadow: 0 5px 18px #0002}
+.menu > * {display: block; width: 100%; border: none; color: var(--ink); padding: 7px 10px; text-align: left; font-size: .83rem}
+.menu a:hover {background: var(--soft)}
+.prompt-browser {padding: 16px 26px; background: var(--soft); border-top: 1px solid var(--rule)}
+.history-head form {display: flex; gap: 6px}
+input {border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); padding: 6px 9px; min-width: 0; max-width: 100%}
+.prompt-item {padding: 10px 0; border-bottom: 1px solid var(--rule)}
+.prompt-item summary {cursor: pointer}
+.prompt-item small {color: var(--muted); font-size: .78rem}
+.prompt-item .preview {display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap}
+.prompt-item pre {white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; padding: 10px; background: var(--paper); border-radius: 6px}
+.prompt-list {margin: 12px 0}
+.detail-body {padding: 0 26px 20px}
+.metrics {display: flex; flex-wrap: wrap; gap: 18px 42px; margin: 7px 0 24px}
+.metrics dt {font-size: .8rem; color: var(--muted)}
+.metrics dd {font-size: 1.16rem; margin: 2px 0 0; font-weight: 580; font-variant-numeric: tabular-nums}
+.table-wrap {overflow-x: auto; margin: 5px 0 17px}
+table {width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: .86rem}
+th,td {padding: 8px; border-bottom: 1px solid var(--rule); text-align: right; white-space: nowrap}
+th {color: var(--muted); font-weight: 500}
+th:first-child,td:first-child {text-align: left}
+.empty {padding: 24px 26px; color: var(--muted)}
+.error {color: var(--negative)}
+@media (max-width: 750px) {
+  .topbar {height: 52px}
+  .page-heading {margin: 22px 0 16px}
+  .activity {--rail: 152px}
+  .panel-head,.section-head,.plot-row,.lane,.plot-note,.provider-line,.prompt-browser,.detail-body {padding-inline: 16px}
+  .provider-line {grid-template-columns: minmax(110px,1.3fr) 1fr 1fr auto; gap: 6px}
+  .provider-line .cost {display: none}
+  .graph {margin-top: 6px}
+}
+@media (max-width: 520px) {
+  .topbar,main {padding-inline: 12px}
+  .workspace {display: none}
+  .page-heading {gap: 12px}
+  .ranges {width: 100%}
+  .ranges button {flex: 1}
+  .activity {--rail: 96px}
+  .plot-row {grid-template-columns: 1fr}
+  .readout {display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 0}
+  .readout .big {order: -1; margin: 0}
+  .graph {margin: 18px 0 0 var(--rail)}
+  .plot {height: 112px}
+  .lane {min-height: 42px}
+  .lane-key {display: grid; grid-template-columns: 6px minmax(0,1fr); gap: 0 5px; padding-right: 5px; font-size: .78rem}
+  .dot {width: 6px; height: 6px}
+  .lane-key small {grid-column: 2; margin: 0; font-size: .66rem}
+  .ticks {font-size: .64rem}
+  .provider-line {grid-template-columns: minmax(90px,1fr) 46px 117px; font-size: .83rem}
+  .provider-line .requests {display: none}
+  .panel-head {align-items: flex-start}
+  .period {font-size: .73rem}
+  .section-head,.panel-head {padding-block: 15px 12px}
+  .history-head form {width: 100%}
+  .history-head input {flex: 1}
+}
+@media (max-width: 520px) { .ticks .minor {display: none} }
+
+.sr-only {position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap}
+@media (max-width: 359px) { .provider-line {grid-template-columns: minmax(70px,1fr) 40px 112px; padding-inline: 9px} }

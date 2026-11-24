@@ -16,35 +16,22 @@ Changes that have not been released yet.
 
 ### Added
 
-- Added a startup release check for both `agentusage` and `au`. When GitHub
-  confirms that a newer release exists, the CLI prints a friendly upgrade
-  reminder and the TUI keeps the notice visible in its header; offline and
-  failed checks stay silent.
-- Added a persistent, high-contrast TUI date-range selector for `Today`,
-  `Week`, `30 Days`, and `All`, with direct `1`-`4` shortcuts in addition to
-  `w` cycling.
-- Added a responsive TUI control bar that adapts to the provider, request, and
-  prompt views, with balanced Navigate/View/App groups on wide terminals and a
-  compact two-line layout on narrower screens.
-- Added flexible TUI prompt-history navigation: direct `p` access from the
-  provider grid, horizontal provider navigation with arrows or `h`/`l`,
-  `Home`/`End` jumps, and hierarchical `Esc`/`Backspace` return navigation.
-- Added macOS-friendly TUI scrolling with `Ctrl+U`/`Ctrl+D`,
-  `Ctrl+B`/`Ctrl+F`, `Space`/`b`, and mouse-wheel support.
-- Added the `m` TUI mouse-capture toggle so macOS users can disable mouse
-  reporting, select rendered prompt text with the terminal, and copy it with
-  `Cmd+C`, then restore wheel scrolling when finished.
+- The browser overview plots token activity across providers, marks the peak, and aligns colored provider rows to the time axis. Select a row to isolate its usage. Open a provider page to compare models.
+- Today shows hourly usage. The longer chart windows show daily usage, with a 90-day chart for All time. The trend API accepts `interval=hour` with `window=today` and includes a UTC `bucket_start` for each point.
+- Codex provider pages and downloadable SVG reports show the percentage of input served from cache. The write metric appears when Codex records writes in the period, and the model table adds a write column when any model records them.
+- The TUI compares providers, displays trends for Week and 30 Days, and shows recent requests alongside the provider table at 110 columns or wider. Select a provider to inspect models, projects, requests, or user prompts.
+- Both executables check for new releases at startup. When an update is available, the CLI prints an upgrade command and the TUI shows a notice.
+
+### Changed
+
+- Prompt history is available beside each provider and on its full page. Both browser views support search, expansion, and pagination. Prompt bodies load when the user opens history.
+- The TUI has a context-sensitive footer and a `?` shortcut reference. Use `1`–`4` or `w` for time windows, `p` for prompts, `v` for the report, and `m` for terminal text selection. The overview marks partial cost estimates with an asterisk.
 
 ### Fixed
 
-- Prompt-history tables now fit the available terminal width exactly and use
-  Unicode display widths, preventing wrapped or skewed columns when prompts or
-  model names contain wide characters.
-- PostgreSQL summary buckets now cast `SUM(BIGINT)` results back to `BIGINT`,
-  preventing model, provider, and client aggregates from failing Rust `i64`
-  deserialization in PostgreSQL-backed dashboards and reports.
-- PostgreSQL loopback-host validation now compiles cleanly on Windows with
-  warnings denied while retaining Unix-socket support on Unix platforms.
+- Codex ingestion reads `cache_write_input_tokens` from rollout usage counters.
+- The TUI recent-request list filters out usage events with zero requests. Prompt tables account for Unicode display width.
+- PostgreSQL summary queries cast `SUM(BIGINT)` results to `BIGINT` for Rust decoding. Local PostgreSQL host validation builds on Windows and continues to support Unix sockets on Unix.
 
 ## [1.4.0] - 2026-08-10
 

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Agentusage</title>
+<link rel="stylesheet" href="/assets/dashboard.css">
+<script defer src="/assets/activity.js"></script>
+<script defer src="/assets/dashboard.js"></script>
+</head>
+<body>
+<header><div class="topbar">
+  <a class="brand" href="/"><span class="monogram" aria-hidden="true">au</span>Agentusage</a>
+  <span class="workspace">Local dashboard</span>
+  <button id="theme-toggle" class="quiet" type="button">Dark theme</button>
+</div></header>
+<main id="app">
+  <div class="page-heading">
+    <div><a id="back" hidden href="/">← Usage overview</a><h1 id="title">Usage overview</h1></div>
+    <nav class="ranges" aria-label="Date range">
+      <button data-window="today">Today</button><button data-window="7d">7 days</button>
+      <button data-window="30d">30 days</button><button data-window="all">All time</button>
+    </nav>
+  </div>
+  <div id="content" aria-busy="true"><p role="status">Loading usage…</p></div>
+</main>
+</body>
+</html>

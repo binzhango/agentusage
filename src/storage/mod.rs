@@ -122,8 +122,24 @@ pub struct UsageSummary {
     pub primary_resets_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrendInterval {
+    Hour,
+    Day,
+}
+
+impl TrendInterval {
+    pub fn start(self, time: DateTime<Utc>, from: DateTime<Utc>) -> DateTime<Utc> {
+        match self {
+            Self::Hour => from + chrono::Duration::hours((time - from).num_hours()),
+            Self::Day => crate::local_midnight_utc(time.with_timezone(&chrono::Local).date_naive()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DailyUsagePoint {
+pub struct UsageTrendPoint {
+    pub bucket_start: DateTime<Utc>,
     pub date: NaiveDate,
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -134,6 +150,7 @@ pub struct DailyUsagePoint {
 
 #[derive(Debug, Clone)]
 pub struct UsageEventQuery {
+    pub requests_only: bool,
     pub from: DateTime<Utc>,
     pub to: DateTime<Utc>,
     pub before: Option<UsageEventCursor>,
@@ -493,15 +510,16 @@ impl Backend {
         }
     }
 
-    pub fn daily_trend_for_agent(
+    pub fn trend_for_agent(
         &mut self,
         agent_name: &str,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
-    ) -> Result<Vec<DailyUsagePoint>> {
+        interval: TrendInterval,
+    ) -> Result<Vec<UsageTrendPoint>> {
         match self {
-            Self::Sqlite(store) => store.daily_trend_for_agent(agent_name, from, to),
-            Self::Postgres(store) => store.daily_trend_for_agent(agent_name, from, to),
+            Self::Sqlite(store) => store.trend_for_agent(agent_name, from, to, interval),
+            Self::Postgres(store) => store.trend_for_agent(agent_name, from, to, interval),
         }
     }
 
