@@ -30,30 +30,15 @@ Before merging a release change to `main`:
 2. Update the README plus the relevant usage, API, configuration, or development
    guide. Document defaults, limits, privacy behavior, and unsupported provider
    cases instead of implying data is universally available.
-3. Refresh checked-in SVG screenshots when the browser, TUI, API, or export
-   presentation changes. Validate every SVG with `xmllint --noout` and inspect a
-   rasterized copy before committing it.
+3. Refresh the affected guide images with sample data. The [browser capture](images/browser-dashboard.jpg) is JPEG and the [terminal capture](images/terminal-dashboard.png) is PNG. Generate the [provider report](images/svg-export.svg) using **Download SVG**. Open the images and validate SVG assets with `xmllint --noout`.
 4. Use sanitized fixtures and examples. Never include real prompt text, source
    paths, credentials, raw provider history, or normalized databases in release
    documentation or artifacts.
-5. Run `make ci`, an optimized binary smoke test, and `cargo package --locked
-   --allow-dirty` before pushing the release candidate.
+5. Run `make ci` and smoke-test the optimized binaries before pushing the release candidate.
 
 ## Automatic release
 
-Releases are driven by pushes to `main`; no manual version edit or tag is
-needed. The workflow serializes releases and, for each main-branch push:
-
-1. Bumps the minor version with `cargo set-version` (for example, `1.0.0` to
-   `1.1.0`).
-2. Promotes the detailed `Unreleased` changelog into a dated version section,
-   resets `Unreleased`, and uses the promoted text as the GitHub release body.
-3. Runs formatting, compilation, tests, Clippy, and package checks.
-4. Commits the version and changelog update and creates a `vX.Y.Z` tag.
-5. Publishes `agentusage` to crates.io.
-6. Builds archives and attaches them, plus SHA-256 checksums, to a GitHub
-   release. The release body is generated from `RELEASE_NOTES.md`; GitHub's
-   pull-request summary is not used.
+The [release workflow](../.github/workflows/release.yml) runs on pushes to `main` and serializes release jobs. It bumps the minor version, verifies the source, promotes the `Unreleased` notes into a dated section, and uses those notes for the GitHub release. It commits the version and changelog, tags the revision, and publishes the crate. Platform jobs build the tagged revision. The release contains both binary names, platform archives, and SHA-256 checksums.
 
 After the workflow completes, download an archive for one target platform and
 verify its checksum before publishing installation instructions.
@@ -89,23 +74,21 @@ agentusage daily --provider copilot
 For a clean machine, confirm the first-run storage prompt rejects report access
 until SQLite or PostgreSQL is initialized, then test provider synchronization.
 
-For a release containing prompt-history changes, use sanitized provider
-fixtures and additionally verify:
+### Dashboard and API checks
+
+Use a separate Agentusage state directory and synthetic provider history for documentation captures. For an isolated browser preview, initialize the test database with a manual sync and start the server with a test config containing `[sync]` and `auto_sync = false`. This keeps the fixture data stable during capture.
+
+- **Browser activity.** Check Today against hourly buckets and a longer window against daily buckets. Inspect the peak, select a provider row, then open its model page. Check that All time labels the 90-day chart separately from full-history totals.
+- **Codex cache.** Test a period with input and zero writes, a period with positive writes for one model, and a period with no input. Compare the displayed percentage, exact model reads, and presence of the write column with the same period’s summary. Download an SVG and verify its cache metrics and columns.
+- **Prompt history.** Exercise **Prompt history** beside a provider and **Show prompts** on its page. Verify that the first prompt request follows the opening action. Test search, expansion, pagination, and an empty result. In the TUI, select a provider, press `p`, and use `Enter` to read a prompt.
+- **Terminal navigation.** Check the provider and request panes at 110 columns or wider and request navigation at a narrower width. Exercise the date keys, `v`, `?`, and back navigation.
+
+With the test server running, check the HTTP responses:
 
 ```bash
-agentusage sync codex --sessions-dir /path/to/sanitized/sessions
-agentusage dashboard
-agentusage server --host 127.0.0.1 --port 8787
+curl -i 'http://127.0.0.1:8787/api/trend?provider=codex&window=today&interval=hour'
+curl -i 'http://127.0.0.1:8787/api/trend?provider=codex&window=7d&interval=hour'
+curl -i 'http://127.0.0.1:8787/api/prompts?provider=codex&window=all&limit=2'
 ```
 
-In another terminal while the server is running:
-
-```bash
-curl 'http://127.0.0.1:8787/api/prompts?provider=codex&window=all&limit=2'
-```
-
-In the TUI, open Codex, press `p`, select a prompt, and expand it with `Enter`.
-In the browser, confirm no prompt request occurs until `Show prompts` is chosen,
-then verify expansion, search, pagination, and an empty result. Confirm API
-responses include `Cache-Control: no-store` and that a non-loopback host is
-rejected.
+The first request returns hourly buckets, the second returns HTTP 400 with `invalid_interval`, and the third returns a prompt page. Confirm `Cache-Control: no-store` on JSON responses and verify the server rejects a non-loopback bind address.

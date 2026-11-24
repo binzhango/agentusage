@@ -518,15 +518,21 @@ fn stable(value: &str) -> String {
     hash.update(value.as_bytes());
     hex::encode(hash.finalize())
 }
-fn claude_cost(model: &str, input: i64, output: i64, cache_read: i64, cache_write: i64) -> f64 {
+pub(crate) fn claude_rates(model: &str) -> Option<(f64, f64, f64, f64)> {
     let m = model.to_ascii_lowercase();
-    let (i, o, r, w) = if m.contains("opus") {
-        (15.0, 75.0, 1.5, 18.75)
+    if m.contains("opus") {
+        Some((15.0, 75.0, 1.5, 18.75))
     } else if m.contains("haiku") {
-        (0.8, 4.0, 0.08, 1.0)
+        Some((0.8, 4.0, 0.08, 1.0))
     } else if m.contains("sonnet") {
-        (3.0, 15.0, 0.3, 3.75)
+        Some((3.0, 15.0, 0.3, 3.75))
     } else {
+        None
+    }
+}
+
+fn claude_cost(model: &str, input: i64, output: i64, cache_read: i64, cache_write: i64) -> f64 {
+    let Some((i, o, r, w)) = claude_rates(model) else {
         return 0.0;
     };
     (input as f64 * i + output as f64 * o + cache_read as f64 * r + cache_write as f64 * w)

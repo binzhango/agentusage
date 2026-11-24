@@ -1,6 +1,6 @@
 use super::{
-    DailyUsagePoint, FileCursor, IngestRecord, PromptDetail, PromptQuery, RawEvent, UsageBucket,
-    UsageEvent, UsageEventDetail, UsageEventQuery, UsageMetric, UsageStore, UsageSummary,
+    FileCursor, IngestRecord, PromptDetail, PromptQuery, RawEvent, UsageBucket, UsageEvent,
+    UsageEventDetail, UsageEventQuery, UsageMetric, UsageStore, UsageSummary, UsageTrendPoint,
     add_event, prompt_detail, usage_event_detail,
 };
 use anyhow::Result;
@@ -127,12 +127,13 @@ impl PostgresStore {
         Ok(())
     }
 
-    pub fn daily_trend_for_agent(
+    pub fn trend_for_agent(
         &mut self,
         agent_name: &str,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
-    ) -> Result<Vec<DailyUsagePoint>> {
+        interval: super::TrendInterval,
+    ) -> Result<Vec<UsageTrendPoint>> {
         let rows = self.client.query(
             "SELECT occurred_at, model, input_tokens, output_tokens, cache_read_tokens, total_tokens FROM agentusage_usage_events WHERE occurred_at >= $1 AND occurred_at < $2 AND agent_name = $3 ORDER BY occurred_at, model",
             &[&from, &to, &agent_name],
@@ -140,12 +141,15 @@ impl PostgresStore {
         let mut points = BTreeMap::new();
         for row in rows {
             let occurred_at: DateTime<Utc> = row.get(0);
-            let date = occurred_at.with_timezone(&Local).date_naive();
+            let bucket_start = interval.start(occurred_at, from);
             let model: Option<String> = row.get(1);
-            let point = points.entry(date).or_insert_with(|| DailyUsagePoint {
-                date,
-                ..Default::default()
-            });
+            let point = points
+                .entry(bucket_start)
+                .or_insert_with(|| UsageTrendPoint {
+                    bucket_start,
+                    date: bucket_start.with_timezone(&Local).date_naive(),
+                    ..Default::default()
+                });
             point.input_tokens += row.get::<_, i64>(2);
             point.output_tokens += row.get::<_, i64>(3);
             point.cache_read_tokens += row.get::<_, i64>(4);
@@ -368,8 +372,8 @@ impl UsageStore for PostgresStore {
         let mut events = Vec::new();
         loop {
             let rows = self.client.query(
-                "SELECT e.event_id,e.occurred_at,e.provider_id,e.agent_name,e.account_id,e.session_id,e.model,e.client,e.project,e.input_tokens,e.output_tokens,e.reasoning_tokens,e.cache_read_tokens,e.cache_write_tokens,e.total_tokens,e.cost_usd,e.ai_units_nano,e.request_multiplier,e.ai_credits,e.requests,e.prompts,e.lines_added,e.lines_removed,e.dedup_key,e.raw_event_id,raw.source_system,raw.source_channel,raw.payload FROM agentusage_usage_events e JOIN agentusage_usage_raw_events raw ON raw.event_id=e.raw_event_id WHERE e.agent_name=$1 AND e.occurred_at>=$2 AND e.occurred_at<$3 AND (e.occurred_at<$4 OR (e.occurred_at=$4 AND e.event_id<$5)) AND ($6::text IS NULL OR e.model=$6) AND ($7::text IS NULL OR e.session_id=$7) ORDER BY e.occurred_at DESC,e.event_id DESC LIMIT $8",
-                &[&agent_name, &query.from, &query.to, &before_at, &before_id, &query.model, &query.session_id, &fetch_limit],
+                "SELECT e.event_id,e.occurred_at,e.provider_id,e.agent_name,e.account_id,e.session_id,e.model,e.client,e.project,e.input_tokens,e.output_tokens,e.reasoning_tokens,e.cache_read_tokens,e.cache_write_tokens,e.total_tokens,e.cost_usd,e.ai_units_nano,e.request_multiplier,e.ai_credits,e.requests,e.prompts,e.lines_added,e.lines_removed,e.dedup_key,e.raw_event_id,raw.source_system,raw.source_channel,raw.payload FROM agentusage_usage_events e JOIN agentusage_usage_raw_events raw ON raw.event_id=e.raw_event_id WHERE e.agent_name=$1 AND e.occurred_at>=$2 AND e.occurred_at<$3 AND (e.occurred_at<$4 OR (e.occurred_at=$4 AND e.event_id<$5)) AND ($6::text IS NULL OR e.model=$6) AND ($7::text IS NULL OR e.session_id=$7) AND (NOT $9::bool OR e.requests>0) ORDER BY e.occurred_at DESC,e.event_id DESC LIMIT $8",
+                &[&agent_name, &query.from, &query.to, &before_at, &before_id, &query.model, &query.session_id, &fetch_limit, &query.requests_only],
             )?;
             let batch_len = rows.len();
             let Some(last) = rows.last() else {
@@ -629,14 +633,22 @@ mod tests {
         );
         assert_eq!(sqlite_summary.tools, postgres_summary.tools);
 
-        let sqlite_trend = sqlite.daily_trend_for_agent("codex", from, to).unwrap();
-        let postgres_trend = postgres.daily_trend_for_agent("codex", from, to).unwrap();
-        assert_eq!(sqlite_trend.len(), postgres_trend.len());
-        assert_eq!(sqlite_trend[0].date, postgres_trend[0].date);
-        assert_eq!(sqlite_trend[0].total_tokens, 170);
-        assert_eq!(sqlite_trend[0].total_tokens, postgres_trend[0].total_tokens);
+        for interval in [
+            crate::storage::TrendInterval::Day,
+            crate::storage::TrendInterval::Hour,
+        ] {
+            let sqlite_trend = sqlite.trend_for_agent("codex", from, to, interval).unwrap();
+            let postgres_trend = postgres
+                .trend_for_agent("codex", from, to, interval)
+                .unwrap();
+            assert_eq!(sqlite_trend.len(), postgres_trend.len());
+            assert_eq!(sqlite_trend[0].bucket_start, postgres_trend[0].bucket_start);
+            assert_eq!(sqlite_trend[0].total_tokens, 170);
+            assert_eq!(sqlite_trend[0].total_tokens, postgres_trend[0].total_tokens);
+        }
 
         let query = UsageEventQuery {
+            requests_only: true,
             from,
             to,
             before: None,

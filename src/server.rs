@@ -1,3 +1,4 @@
+use crate::storage::{TrendInterval, UsageTrendPoint};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use percent_encoding::percent_decode_str;
@@ -21,16 +22,6 @@ macro_rules! server_log {
 struct ProviderStatus {
     name: String,
     available: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct TrendPoint {
-    date: NaiveDate,
-    total_tokens: i64,
-    input_tokens: i64,
-    output_tokens: i64,
-    cache_read_tokens: i64,
-    models: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +134,14 @@ fn handle_request(request: Request, verbose: bool) -> Result<()> {
     let result = (|| -> Result<()> {
         match (request.method(), path.as_str()) {
             (&Method::Get, "/") => respond_html(request),
+            (&Method::Get, path) if path.starts_with("/assets/") => {
+                if let Some((mime, body)) = crate::view::asset(path) {
+                    request.respond(Response::from_string(body).with_header(content_type(mime)))?;
+                } else {
+                    request.respond(Response::empty(StatusCode(404)))?;
+                }
+                Ok(())
+            }
             (&Method::Get, path) if path.starts_with("/provider/") => respond_html(request),
             (&Method::Get, "/api/providers") => respond_json(request, providers(verbose)),
             (&Method::Get, "/api/summary") => {
@@ -163,7 +162,15 @@ fn handle_request(request: Request, verbose: bool) -> Result<()> {
                     .map(String::as_str)
                     .unwrap_or("codex");
                 let window = params.get("window").map(String::as_str).unwrap_or("today");
-                respond_api(request, api_trend(provider, window, verbose))
+                respond_api(
+                    request,
+                    api_trend(
+                        provider,
+                        window,
+                        params.get("interval").map(String::as_str),
+                        verbose,
+                    ),
+                )
             }
             (&Method::Get, "/api/events") => {
                 let query = url.split_once('?').map(|(_, value)| value).unwrap_or("");
@@ -256,10 +263,27 @@ fn api_summary(
     summary(provider, window, verbose).map_err(|error| storage_error(provider, error, verbose))
 }
 
-fn api_trend(provider: &str, window: &str, verbose: bool) -> ApiResult<Vec<TrendPoint>> {
+fn api_trend(
+    provider: &str,
+    window: &str,
+    interval: Option<&str>,
+    verbose: bool,
+) -> ApiResult<Vec<UsageTrendPoint>> {
     validate_api_provider(provider)?;
     validate_api_window(window)?;
-    trend(provider, window, verbose).map_err(|error| storage_error(provider, error, verbose))
+    let interval = match interval {
+        None | Some("day") => TrendInterval::Day,
+        Some("hour") if window == "today" => TrendInterval::Hour,
+        _ => {
+            return Err(ApiError {
+                status: 400,
+                code: "invalid_interval",
+                message: "Use day for any window or hour for today".into(),
+            });
+        }
+    };
+    trend(provider, window, interval, verbose)
+        .map_err(|error| storage_error(provider, error, verbose))
 }
 
 fn events(
@@ -279,6 +303,7 @@ fn events(
         .map(|cursor| parse_event_cursor(cursor))
         .transpose()?;
     let query = crate::storage::UsageEventQuery {
+        requests_only: false,
         from,
         to,
         before,
@@ -535,7 +560,12 @@ fn summary(provider: &str, window: &str, verbose: bool) -> Result<crate::storage
     result
 }
 
-fn trend(provider: &str, window: &str, verbose: bool) -> Result<Vec<TrendPoint>> {
+fn trend(
+    provider: &str,
+    window: &str,
+    interval: TrendInterval,
+    verbose: bool,
+) -> Result<Vec<UsageTrendPoint>> {
     let (mut start, end) = window_dates(window)?;
     // A useful chart for "all time" should remain readable and inexpensive.
     // The summary endpoint still supports the complete all-time range.
@@ -550,47 +580,35 @@ fn trend(provider: &str, window: &str, verbose: bool) -> Result<Vec<TrendPoint>>
     let mut store = backend_for(provider, verbose)
         .with_context(|| format!("no initialized storage for provider {provider}"))?;
     let query_started = Instant::now();
-    let daily_points = store.daily_trend_for_agent(agent_name(provider), from, to)?;
-    let data_days = daily_points.len();
-    if verbose {
-        server_log!(
-            "query.trend.complete provider={provider} data_days={data_days} duration_ms={}",
-            query_started.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-    let points_by_date = daily_points
+    let mut observed: BTreeMap<_, _> = store
+        .trend_for_agent(agent_name(provider), from, to, interval)?
         .into_iter()
-        .map(|point| {
-            (
-                point.date,
-                TrendPoint {
-                    date: point.date,
-                    total_tokens: point.total_tokens,
-                    input_tokens: point.input_tokens,
-                    output_tokens: point.output_tokens,
-                    cache_read_tokens: point.cache_read_tokens,
-                    models: point.models,
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+        .map(|point| (point.bucket_start, point))
+        .collect();
     let mut points = Vec::new();
-    let mut day = start;
-    while day <= end {
-        points.push(points_by_date.get(&day).cloned().unwrap_or(TrendPoint {
-            date: day,
-            total_tokens: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            models: BTreeMap::new(),
+    let mut start = from;
+    let last = if interval == TrendInterval::Hour {
+        Utc::now().min(to)
+    } else {
+        to
+    };
+    while start < to && start <= last {
+        let date = start.with_timezone(&Local).date_naive();
+        points.push(observed.remove(&start).unwrap_or(UsageTrendPoint {
+            bucket_start: start,
+            date,
+            ..Default::default()
         }));
-        day += Duration::days(1);
+        start = match interval {
+            TrendInterval::Hour => start + Duration::hours(1),
+            TrendInterval::Day => crate::local_midnight_utc(date + Duration::days(1)),
+        };
     }
     if verbose {
         server_log!(
-            "trend.render provider={provider} rendered_days={}",
-            points.len()
+            "query.trend.complete provider={provider} buckets={} duration_ms={}",
+            points.len(),
+            query_started.elapsed().as_secs_f64() * 1000.0
         );
     }
     Ok(points)

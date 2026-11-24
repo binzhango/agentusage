@@ -8,8 +8,8 @@ use std::{
 };
 
 use super::{
-    DailyUsagePoint, FileCursor, IngestRecord, PromptDetail, PromptQuery, RawEvent, UsageEvent,
-    UsageEventDetail, UsageEventQuery, UsageMetric, UsageStore, UsageSummary, add_event,
+    FileCursor, IngestRecord, PromptDetail, PromptQuery, RawEvent, UsageEvent, UsageEventDetail,
+    UsageEventQuery, UsageMetric, UsageStore, UsageSummary, UsageTrendPoint, add_event,
     prompt_detail, usage_event_detail,
 };
 
@@ -64,12 +64,13 @@ impl SqliteStore {
         Ok(store)
     }
 
-    pub fn daily_trend_for_agent(
+    pub fn trend_for_agent(
         &mut self,
         agent_name: &str,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
-    ) -> Result<Vec<DailyUsagePoint>> {
+        interval: super::TrendInterval,
+    ) -> Result<Vec<UsageTrendPoint>> {
         let mut statement = self.connection.prepare(
             "SELECT occurred_at, model, input_tokens, output_tokens, cache_read_tokens, total_tokens FROM agentusage_usage_events WHERE occurred_at >= ?1 AND occurred_at < ?2 AND agent_name = ?3 ORDER BY occurred_at, model",
         )?;
@@ -78,7 +79,7 @@ impl SqliteStore {
             |row| {
                 Ok((
                     DateTime::parse_from_rfc3339(&row.get::<_, String>(0)?)
-                        .map(|value| value.with_timezone(&Local).date_naive())
+                        .map(|value| value.to_utc())
                         .map_err(|_| rusqlite::Error::InvalidQuery)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, i64>(2)?,
@@ -90,11 +91,15 @@ impl SqliteStore {
         )?;
         let mut points = BTreeMap::new();
         for row in rows {
-            let (date, model, input_tokens, output_tokens, cache_read_tokens, total_tokens) = row?;
-            let point = points.entry(date).or_insert_with(|| DailyUsagePoint {
-                date,
-                ..Default::default()
-            });
+            let (time, model, input_tokens, output_tokens, cache_read_tokens, total_tokens) = row?;
+            let bucket_start = interval.start(time, from);
+            let point = points
+                .entry(bucket_start)
+                .or_insert_with(|| UsageTrendPoint {
+                    bucket_start,
+                    date: bucket_start.with_timezone(&Local).date_naive(),
+                    ..Default::default()
+                });
             point.input_tokens += input_tokens;
             point.output_tokens += output_tokens;
             point.cache_read_tokens += cache_read_tokens;
@@ -400,7 +405,7 @@ impl UsageStore for SqliteStore {
             requested_limit
         } as i64;
         let mut statement = self.connection.prepare(
-            "SELECT e.event_id,e.occurred_at,e.provider_id,e.agent_name,e.account_id,e.session_id,e.model,e.client,e.project,e.input_tokens,e.output_tokens,e.reasoning_tokens,e.cache_read_tokens,e.cache_write_tokens,e.total_tokens,e.cost_usd,e.ai_units_nano,e.request_multiplier,e.ai_credits,e.requests,e.prompts,e.lines_added,e.lines_removed,e.dedup_key,e.raw_event_id,raw.source_system,raw.source_channel,raw.payload FROM agentusage_usage_events e JOIN agentusage_usage_raw_events raw ON raw.event_id=e.raw_event_id WHERE e.agent_name=?1 AND e.occurred_at>=?2 AND e.occurred_at<?3 AND (e.occurred_at<?4 OR (e.occurred_at=?4 AND e.event_id<?5)) AND (?6 IS NULL OR e.model=?6) AND (?7 IS NULL OR e.session_id=?7) ORDER BY e.occurred_at DESC,e.event_id DESC LIMIT ?8",
+            "SELECT e.event_id,e.occurred_at,e.provider_id,e.agent_name,e.account_id,e.session_id,e.model,e.client,e.project,e.input_tokens,e.output_tokens,e.reasoning_tokens,e.cache_read_tokens,e.cache_write_tokens,e.total_tokens,e.cost_usd,e.ai_units_nano,e.request_multiplier,e.ai_credits,e.requests,e.prompts,e.lines_added,e.lines_removed,e.dedup_key,e.raw_event_id,raw.source_system,raw.source_channel,raw.payload FROM agentusage_usage_events e JOIN agentusage_usage_raw_events raw ON raw.event_id=e.raw_event_id WHERE e.agent_name=?1 AND e.occurred_at>=?2 AND e.occurred_at<?3 AND (e.occurred_at<?4 OR (e.occurred_at=?4 AND e.event_id<?5)) AND (?6 IS NULL OR e.model=?6) AND (?7 IS NULL OR e.session_id=?7) AND (NOT ?9 OR e.requests>0) ORDER BY e.occurred_at DESC,e.event_id DESC LIMIT ?8",
         )?;
         let mut events = Vec::new();
         loop {
@@ -414,7 +419,8 @@ impl UsageStore for SqliteStore {
                         before_id,
                         query.model,
                         query.session_id,
-                        fetch_limit
+                        fetch_limit,
+                        query.requests_only
                     ],
                     sqlite_event_parts,
                 )?
@@ -653,10 +659,11 @@ mod tests {
         assert_eq!(summary.models["gpt-5"].total_tokens, 16);
         assert_eq!(summary.projects["agentusage"].total_tokens, 16);
         let trend = store
-            .daily_trend_for_agent(
+            .trend_for_agent(
                 "codex",
                 occurred_at - chrono::Duration::minutes(1),
                 occurred_at + chrono::Duration::minutes(1),
+                crate::storage::TrendInterval::Day,
             )
             .unwrap();
         assert_eq!(trend.len(), 1);
@@ -666,6 +673,29 @@ mod tests {
         );
         assert_eq!(trend[0].total_tokens, 16);
         assert_eq!(trend[0].models["gpt-5"], 16);
+        let hour = chrono::Duration::hours(1);
+        let second = UsageEvent {
+            event_id: "next-hour".into(),
+            dedup_key: "next-hour".into(),
+            occurred_at: occurred_at + hour,
+            ..event
+        };
+        assert!(store.append_usage_event(&second).unwrap());
+        let hours = store
+            .trend_for_agent(
+                "codex",
+                occurred_at,
+                occurred_at + hour * 2,
+                crate::storage::TrendInterval::Hour,
+            )
+            .unwrap();
+        assert_eq!(
+            hours
+                .iter()
+                .map(|p| (p.bucket_start, p.models["gpt-5"]))
+                .collect::<Vec<_>>(),
+            [(occurred_at, 16), (occurred_at + hour, 16)]
+        );
     }
 
     #[test]
@@ -706,6 +736,7 @@ mod tests {
                 .unwrap();
         }
         let base = UsageEventQuery {
+            requests_only: false,
             from: occurred_at - chrono::Duration::minutes(1),
             to: occurred_at + chrono::Duration::minutes(1),
             before: None,
@@ -729,11 +760,40 @@ mod tests {
                         occurred_at,
                         event_id: first[0].usage.event_id.clone(),
                     }),
-                    ..base
+                    ..base.clone()
                 },
             )
             .unwrap();
         assert_eq!(second[0].usage.event_id, "event-a");
+        // A newer prompt must not take a request's place before LIMIT is applied.
+        store
+            .append_usage_event(&UsageEvent {
+                event_id: "prompt-only".into(),
+                occurred_at: occurred_at + chrono::Duration::seconds(1),
+                provider_id: "codex".into(),
+                agent_name: "codex".into(),
+                prompts: 1,
+                dedup_key: "prompt-only".into(),
+                raw_event_id: "raw-event-b".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            store.usage_events("codex", &base).unwrap()[0]
+                .usage
+                .event_id,
+            "prompt-only"
+        );
+        let requests = store
+            .usage_events(
+                "codex",
+                &UsageEventQuery {
+                    requests_only: true,
+                    ..base
+                },
+            )
+            .unwrap();
+        assert_eq!(requests[0].usage.event_id, "event-b");
         let detail = store.usage_event("event-a").unwrap().unwrap();
         assert!(detail.raw_payload.is_some());
     }
@@ -817,6 +877,7 @@ mod tests {
             .usage_events(
                 "codex",
                 &UsageEventQuery {
+                    requests_only: false,
                     from: occurred_at - chrono::Duration::minutes(1),
                     to: occurred_at + chrono::Duration::minutes(1),
                     before: None,
