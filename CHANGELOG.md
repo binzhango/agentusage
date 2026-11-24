@@ -8,6 +8,10 @@ The release workflow updates this file automatically when `main` is released.
 
 Changes that have not been released yet.
 
+## [1.8.0] - 2026-11-24
+
+- Maintenance release
+
 ## [1.7.0] - 2026-08-11
 
 - Maintenance release
