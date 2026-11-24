@@ -32,20 +32,14 @@ and track estimated cost without sending usage data to a hosted service.
 
 ## Install
 
-Download a prebuilt archive from the
-[latest release](https://github.com/binzhango/agentusage/releases/latest),
-verify it against `SHA256SUMS`, and place the executables on your `PATH`.
-Archives are available for macOS Apple Silicon, Linux ARM64, Linux x86_64, and
-Windows x86_64.
-
-With a current stable Rust toolchain, Cargo can install both executables.
+With a current stable Rust toolchain, install both executables from crates.io.
 
 ```bash
 cargo install agentusage --locked
 au --version
 ```
 
-`agentusage` and `au` run the same commands. To use the enhancements described here from a checkout, run `cargo install --path . --locked --bins`, then restart any running `au server` process.
+`agentusage` and `au` run the same commands. You can also download **Source code (zip)** from the [GitHub releases](https://github.com/binzhango/agentusage/releases), extract it, and run `cargo install --path . --locked --bins` from the extracted directory. Restart any running `au server` process after updating.
 
 Every launch performs a short release check. If a newer version is available,
 Agentusage prints the release link and upgrade command. Commands also work offline.
