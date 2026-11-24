@@ -38,7 +38,11 @@ Before merging a release change to `main`:
 
 ## Automatic release
 
-The [release workflow](../.github/workflows/release.yml) runs on pushes to `main` and serializes release jobs. It bumps the minor version, verifies the source, promotes the `Unreleased` notes into a dated section, and uses those notes for the GitHub release. It commits the version and changelog, tags the revision, and publishes the crate. Platform jobs build the tagged revision. The release contains both binary names, platform archives, and SHA-256 checksums.
+The [release workflow](../.github/workflows/release.yml) publishes to crates.io automatically when a push to `main` changes `src/`, `Cargo.toml`, or `Cargo.lock`. It bumps the minor version, verifies the source, commits the version and changelog, and tags the revision. Platform jobs build that revision and attach archives and SHA-256 checksums to the GitHub release. Pull-request CI still runs for documentation and workflow changes.
+
+### Recover an existing GitHub release
+
+If the crate publish succeeded and a platform build failed, open **Actions → Automatic Release → Run workflow**. Select `main` to use the current runners. Enter the full SHA of the existing `chore(release): v… [skip ci]` commit on `main`. The manual run builds all four archives from that commit and reads its dated changelog entry. It skips the version bump and crates.io publish. If the original run never pushed a tag, the GitHub release creates it at the supplied commit.
 
 After the workflow completes, download an archive for one target platform and
 verify its checksum before publishing installation instructions.
